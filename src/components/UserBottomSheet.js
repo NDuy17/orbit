@@ -1,45 +1,63 @@
 import React from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import colors from '../theme/colors';
 import spacing from '../theme/spacing';
 import { formatDistance } from '../utils/distance';
 import GlassCard from './GlassCard';
 import OrbitButton from './OrbitButton';
 import StatusBadge from './StatusBadge';
+import UserAvatar from './UserAvatar';
 
-export default function UserBottomSheet({ user, onClose, onChat, onProfile, onAddFriend }) {
+export default function UserBottomSheet({
+  user,
+  onClose,
+  onChat,
+  onProfile,
+  onAddFriend,
+  onDirections,
+  isDirectionsActive = false,
+}) {
   if (!user) {
     return null;
   }
 
   return (
     <View style={styles.overlay}>
-      <GlassCard style={styles.sheet}>
-        <Pressable onPress={onClose} style={styles.handle} />
-        <View style={styles.header}>
-          <Image source={{ uri: user.avatar }} style={styles.avatar} />
-          <View style={styles.info}>
-            <Text style={styles.name}>{user.name}</Text>
-            <Text style={styles.status}>{user.status}</Text>
-            <View style={styles.metaRow}>
-              <Text style={styles.distance}>{formatDistance(user.distance)}</Text>
-              <StatusBadge isOnline={user.isOnline} label={user.isOnline ? 'Online' : 'Offline'} />
+      <Pressable style={styles.backdrop} onPress={onClose} />
+      <Pressable style={styles.sheetWrap} onPress={(event) => event.stopPropagation?.()}>
+        <GlassCard style={styles.sheet}>
+          <Pressable onPress={onClose} style={styles.handle} />
+          <View style={styles.header}>
+            <UserAvatar uri={user.avatar} size={70} style={styles.avatar} />
+            <View style={styles.info}>
+              <Text style={styles.name}>{user.name}</Text>
+              <Text style={styles.status}>{user.status}</Text>
+              <View style={styles.metaRow}>
+                <Text style={styles.distance}>{formatDistance(user.distance)}</Text>
+                <StatusBadge isOnline={user.isOnline} label={user.isOnline ? 'Online' : 'Offline'} />
+              </View>
             </View>
           </View>
-        </View>
-        <Text style={styles.bio}>{user.bio}</Text>
-        <View style={styles.actions}>
-          <OrbitButton title="Nhắn tin" onPress={onChat} style={styles.actionButton} />
-          <OrbitButton
-            title={user.isFriend ? 'Đã là bạn' : 'Kết bạn'}
-            variant="ghost"
-            onPress={onAddFriend}
-            disabled={user.isFriend}
-            style={styles.actionButton}
-          />
-          <OrbitButton title="Xem hồ sơ" variant="ghost" onPress={onProfile} style={styles.actionButton} />
-        </View>
-      </GlassCard>
+          <Text style={styles.bio}>{user.bio}</Text>
+          <View style={styles.actions}>
+            <OrbitButton
+              title={isDirectionsActive ? 'Ẩn đường đi' : 'Dẫn đường'}
+              variant="ghost"
+              onPress={onDirections}
+              style={styles.actionButton}
+            />
+            <OrbitButton title="Nhắn tin" onPress={onChat} style={styles.actionButton} />
+            <OrbitButton
+              title={user.isFriend ? 'Đã là bạn' : 'Kết bạn'}
+              variant="ghost"
+              onPress={onAddFriend}
+              disabled={user.isFriend}
+              style={styles.actionButton}
+            />
+            <OrbitButton title="Xem hồ sơ" variant="ghost" onPress={onProfile} style={styles.actionButton} />
+          </View>
+        </GlassCard>
+      </Pressable>
     </View>
   );
 }
@@ -47,9 +65,19 @@ export default function UserBottomSheet({ user, onClose, onChat, onProfile, onAd
 const styles = StyleSheet.create({
   overlay: {
     position: 'absolute',
-    left: spacing.lg,
-    right: spacing.lg,
-    bottom: spacing.lg,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'flex-end',
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.lg,
+  },
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  sheetWrap: {
+    alignSelf: 'stretch',
   },
   sheet: {
     paddingTop: spacing.md,
@@ -67,9 +95,6 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   avatar: {
-    width: 70,
-    height: 70,
-    borderRadius: 35,
     borderWidth: 2,
     borderColor: colors.accent,
   },

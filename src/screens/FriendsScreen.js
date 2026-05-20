@@ -1,8 +1,8 @@
 import React, { useEffect } from 'react';
-import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import UserListItem from '../components/UserListItem';
-import DEFAULT_AVATAR_URL from '../constants/defaultAvatar';
+import UserAvatar from '../components/UserAvatar';
 import useUserStore from '../store/userStore';
 import colors from '../theme/colors';
 import spacing from '../theme/spacing';
@@ -30,10 +30,7 @@ export default function FriendsScreen({ navigation }) {
 
     return (
       <View style={styles.requestCard}>
-        <Image
-          source={{ uri: sender.avatar_url || DEFAULT_AVATAR_URL }}
-          style={styles.avatar}
-        />
+        <UserAvatar uri={sender.avatar_url} size={52} style={styles.avatar} />
         <View style={styles.requestContent}>
           <Text style={styles.requestName}>{sender.name || sender.full_name || 'Người dùng Orbit'}</Text>
           <Text style={styles.requestText}>Muốn kết bạn với bạn</Text>
@@ -128,9 +125,8 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   avatar: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    borderWidth: 1,
+    borderColor: colors.line,
   },
   requestContent: {
     flex: 1,

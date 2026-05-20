@@ -1,17 +1,18 @@
 import React from 'react';
-import { Image, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import colors from '../theme/colors';
 import spacing from '../theme/spacing';
 import { formatDistance } from '../utils/distance';
 import OrbitButton from './OrbitButton';
 import StatusBadge from './StatusBadge';
+import UserAvatar from './UserAvatar';
 
 export default function UserListItem({ user, onChat, onAddFriend, showFriendButton = true }) {
   const canAddFriend = showFriendButton && !user.isFriend;
 
   return (
     <View style={styles.item}>
-      <Image source={{ uri: user.avatar }} style={styles.avatar} />
+      <UserAvatar uri={user.avatar} size={54} style={styles.avatar} />
       <View style={styles.content}>
         <View style={styles.header}>
           <Text style={styles.name}>{user.name}</Text>
@@ -44,9 +45,8 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   avatar: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
+    borderWidth: 1,
+    borderColor: colors.line,
   },
   content: {
     flex: 1,

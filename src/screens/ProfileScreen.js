@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import GlassCard from '../components/GlassCard';
 import OrbitButton from '../components/OrbitButton';
+import UserAvatar from '../components/UserAvatar';
 import { fetchProfileById } from '../services/profileService';
 import useUserStore from '../store/userStore';
 import colors from '../theme/colors';
@@ -75,7 +76,7 @@ export default function ProfileScreen({ navigation, route }) {
       {backendLoading || profileLoading ? <Text style={styles.notice}>Đang tải hồ sơ...</Text> : null}
       {error || profileError ? <Text style={styles.error}>{profileError || error}</Text> : null}
       <GlassCard style={styles.profile}>
-        <Image source={{ uri: profile?.avatar }} style={styles.avatar} />
+        <UserAvatar uri={profile?.avatar} size={112} style={styles.avatar} />
         <Text style={styles.name}>{profile?.name || 'Người dùng Orbit'}</Text>
         <Text style={styles.bio}>{profile?.bio || profile?.status || 'Đang dùng Orbit'}</Text>
         <Text style={styles.status}>{profile?.isOnline ? 'Đang online' : profile?.lastActive}</Text>
@@ -139,9 +140,6 @@ const styles = StyleSheet.create({
     gap: spacing.lg,
   },
   avatar: {
-    width: 112,
-    height: 112,
-    borderRadius: 56,
     borderWidth: 3,
     borderColor: colors.accent,
   },

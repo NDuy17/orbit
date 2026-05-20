@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AutoHideNotice from '../components/AutoHideNotice';
@@ -18,6 +18,8 @@ import useUserStore from '../store/userStore';
 import colors from '../theme/colors';
 import spacing from '../theme/spacing';
 import { getVietnameseErrorMessage } from '../utils/errorMessages';
+
+const emptyTrails = {};
 
 export default function HomeMapScreen({ navigation }) {
   const {
@@ -45,6 +47,14 @@ export default function HomeMapScreen({ navigation }) {
   const refreshTimer = useRef(null);
   const latestLocation = useRef(currentLocation);
   const [locationReady, setLocationReady] = useState(false);
+  const [routeTarget, setRouteTarget] = useState(null);
+  const mapUsersKey = users
+    .map(
+      (user) =>
+        `${user.id}:${user.name}:${user.avatar}:${user.location?.latitude}:${user.location?.longitude}`
+    )
+    .join('|');
+  const mapUsers = useMemo(() => users.map((user) => ({ ...user })), [mapUsersKey]);
 
   useEffect(() => {
     let active = true;
@@ -80,6 +90,24 @@ export default function HomeMapScreen({ navigation }) {
       loadFriends();
     }
   }, [isBackendReady, loadFriends]);
+
+  useEffect(() => {
+    if (!routeTarget) {
+      return;
+    }
+
+    const updatedTarget = users.find((user) => user.id === routeTarget.id);
+    const targetChanged =
+      updatedTarget &&
+      (updatedTarget.avatar !== routeTarget.avatar ||
+        updatedTarget.name !== routeTarget.name ||
+        updatedTarget.location?.latitude !== routeTarget.location?.latitude ||
+        updatedTarget.location?.longitude !== routeTarget.location?.longitude);
+
+    if (targetChanged) {
+      setRouteTarget(updatedTarget);
+    }
+  }, [routeTarget, users]);
 
   useEffect(() => {
     if (!isBackendReady || !currentUser?.id || !locationReady) {
@@ -164,10 +192,11 @@ export default function HomeMapScreen({ navigation }) {
   return (
     <View style={styles.container}>
       <LeafletMap
-        users={users}
+        users={mapUsers}
         currentLocation={currentLocation}
-        trails={isBackendReady ? {} : userTrails}
+        trails={isBackendReady ? emptyTrails : userTrails}
         clusterLocation={isBackendReady ? null : clusterLocation}
+        routeTarget={routeTarget}
         onSelectUser={setSelectedUser}
       />
       <SafeAreaView style={styles.floating}>
@@ -199,6 +228,13 @@ export default function HomeMapScreen({ navigation }) {
         onChat={() => navigation.navigate('Chat', { userId: selectedUser?.id })}
         onProfile={() => navigation.navigate('UserProfile', { userId: selectedUser?.id })}
         onAddFriend={() => selectedUser && requestFriend(selectedUser.id)}
+        onDirections={() =>
+          selectedUser &&
+          setRouteTarget((currentTarget) =>
+            currentTarget?.id === selectedUser.id ? null : selectedUser
+          )
+        }
+        isDirectionsActive={routeTarget?.id === selectedUser?.id}
       />
     </View>
   );

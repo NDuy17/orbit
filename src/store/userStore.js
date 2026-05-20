@@ -44,17 +44,28 @@ const useUserStore = create((set) => ({
         return {};
       }
 
-      const applyStatus = (item) =>
+      const applyProfile = (item) =>
         item.id === mappedProfile.id
-          ? { ...item, isOnline: mappedProfile.isOnline, lastActive: mappedProfile.lastActive }
+          ? {
+              ...item,
+              name: mappedProfile.name,
+              avatar: mappedProfile.avatar,
+              avatar_url: mappedProfile.avatar_url,
+              bio: mappedProfile.bio,
+              status: mappedProfile.status,
+              isOnline: mappedProfile.isOnline,
+              lastActive: mappedProfile.lastActive,
+            }
           : item;
 
       return {
-        users: state.users.map(applyStatus),
-        friends: state.friends.map(applyStatus),
+        currentUser:
+          state.currentUser.id === mappedProfile.id ? applyProfile(state.currentUser) : state.currentUser,
+        users: state.users.map(applyProfile),
+        friends: state.friends.map(applyProfile),
         selectedUser:
           state.selectedUser?.id === mappedProfile.id
-            ? applyStatus(state.selectedUser)
+            ? applyProfile(state.selectedUser)
             : state.selectedUser,
       };
     }),

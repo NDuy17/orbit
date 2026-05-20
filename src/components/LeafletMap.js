@@ -11,11 +11,12 @@ function escapeHtml(value) {
     .replace(/'/g, '&#039;');
 }
 
-export function buildLeafletHtml({ users, currentLocation, trails, clusterLocation }) {
+export function buildLeafletHtml({ users, currentLocation, trails, clusterLocation, routeTarget }) {
   const safeUsers = JSON.stringify(users);
   const safeCurrentLocation = JSON.stringify(currentLocation);
   const safeTrails = JSON.stringify(trails || {});
   const safeClusterLocation = JSON.stringify(clusterLocation);
+  const safeRouteTarget = JSON.stringify(routeTarget);
 
   return `
 <!DOCTYPE html>
@@ -111,6 +112,14 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
         border: 2px solid #22D3EE;
         box-shadow: 0 0 18px rgba(34, 211, 238, 0.55);
       }
+      .meet-point {
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        background: #7C3AED;
+        border: 3px solid #F8FAFC;
+        box-shadow: 0 0 22px rgba(124, 58, 237, 0.9);
+      }
     </style>
   </head>
   <body>
@@ -121,6 +130,7 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
       const currentLocation = ${safeCurrentLocation};
       const trails = ${safeTrails};
       const clusterLocation = ${safeClusterLocation};
+      const routeTarget = ${safeRouteTarget};
 
       const map = L.map('map', {
         zoomControl: false,
@@ -148,6 +158,43 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
       });
 
       L.marker([currentLocation.latitude, currentLocation.longitude], { icon: currentIcon }).addTo(map);
+
+      if (routeTarget && routeTarget.location) {
+        const routePoints = [
+          [currentLocation.latitude, currentLocation.longitude],
+          [routeTarget.location.latitude, routeTarget.location.longitude]
+        ];
+
+        const routeLine = L.polyline(routePoints, {
+          color: '#22D3EE',
+          weight: 5,
+          opacity: 0.95,
+          dashArray: '10, 10',
+          lineCap: 'round'
+        }).addTo(map);
+
+        L.circle(routePoints[0], {
+          radius: 70,
+          color: 'rgba(34, 211, 238, 0.75)',
+          fillColor: 'rgba(34, 211, 238, 0.12)',
+          fillOpacity: 1,
+          weight: 2
+        }).addTo(map);
+
+        L.marker(routePoints[1], {
+          icon: L.divIcon({
+            html: '<div class="meet-point"></div>',
+            className: '',
+            iconSize: [22, 22],
+            iconAnchor: [11, 11]
+          })
+        }).addTo(map);
+
+        map.fitBounds(routeLine.getBounds(), {
+          padding: [80, 80],
+          maxZoom: 17
+        });
+      }
 
       Object.keys(trails).forEach((id) => {
         L.polyline(trails[id].map((point) => [point.latitude, point.longitude]), {
@@ -197,10 +244,17 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
 </html>`;
 }
 
-export default function LeafletMap({ users, currentLocation, trails, clusterLocation, onSelectUser }) {
+export default function LeafletMap({
+  users,
+  currentLocation,
+  trails,
+  clusterLocation,
+  routeTarget,
+  onSelectUser,
+}) {
   const html = useMemo(
-    () => buildLeafletHtml({ users, currentLocation, trails, clusterLocation }),
-    [users, currentLocation, trails, clusterLocation]
+    () => buildLeafletHtml({ users, currentLocation, trails, clusterLocation, routeTarget }),
+    [users, currentLocation, trails, clusterLocation, routeTarget]
   );
 
   useEffect(() => {
