@@ -1,0 +1,78 @@
+import { currentLocation } from './mockLocations';
+
+export const currentUser = {
+  id: 'me',
+  name: 'Minh Anh',
+  avatar: 'https://i.pravatar.cc/160?img=47',
+  bio: 'Đang mở Orbit để gặp thêm người thú vị quanh mình.',
+  status: 'Đang ở trung tâm Sài Gòn',
+  friends: 128,
+  met: 42,
+  recent: 12,
+  location: currentLocation,
+};
+
+const mockUsers = [
+  {
+    id: 'u1',
+    name: 'Lan Nhi',
+    avatar: 'https://i.pravatar.cc/160?img=5',
+    status: 'Cà phê và nói chuyện nhẹ',
+    bio: 'Thích thiết kế, nhạc indie và những góc phố nhiều đèn.',
+    isOnline: true,
+    lastActive: 'Đang hoạt động',
+    distance: 120,
+    isFriend: true,
+    location: { latitude: 10.7777, longitude: 106.7015 },
+  },
+  {
+    id: 'u2',
+    name: 'Quang Huy',
+    avatar: 'https://i.pravatar.cc/160?img=12',
+    status: 'Đang đi bộ quanh công viên',
+    bio: 'Product designer, thích chạy bộ buổi tối.',
+    isOnline: true,
+    lastActive: 'Đang hoạt động',
+    distance: 260,
+    isFriend: false,
+    location: { latitude: 10.7765, longitude: 106.7004 },
+  },
+  {
+    id: 'u3',
+    name: 'Mai Chi',
+    avatar: 'https://i.pravatar.cc/160?img=32',
+    status: 'Muốn tìm nhóm xem phim',
+    bio: 'Hay lưu lại những địa điểm nhỏ nhưng có cảm giác đẹp.',
+    isOnline: false,
+    lastActive: '15 phút trước',
+    distance: 480,
+    isFriend: true,
+    location: { latitude: 10.7748, longitude: 106.6998 },
+  },
+  {
+    id: 'u4',
+    name: 'Tuấn Kiệt',
+    avatar: 'https://i.pravatar.cc/160?img=59',
+    status: 'Có mặt ở sự kiện công nghệ',
+    bio: 'Backend developer, thích bản đồ và realtime app.',
+    isOnline: true,
+    lastActive: 'Đang hoạt động',
+    distance: 690,
+    isFriend: false,
+    location: { latitude: 10.7789, longitude: 106.7018 },
+  },
+  {
+    id: 'u5',
+    name: 'Hoàng Nam',
+    avatar: 'https://i.pravatar.cc/160?img=68',
+    status: 'Tắt thông báo một chút',
+    bio: 'Nhiếp ảnh đường phố và những chuyến đi ngắn.',
+    isOnline: false,
+    lastActive: '1 giờ trước',
+    distance: 940,
+    isFriend: true,
+    location: { latitude: 10.7811, longitude: 106.7052 },
+  },
+];
+
+export default mockUsers;
