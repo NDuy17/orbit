@@ -208,6 +208,17 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
         }
       }
 
+      function centerOnCurrent(location) {
+        if (!hasLocation(location)) {
+          return;
+        }
+
+        map.setView(getLatLng(location), Math.max(map.getZoom(), 16), {
+          animate: true,
+          duration: 0.4
+        });
+      }
+
       function buildUserIcon(user) {
         const iconHtml = '<div class="avatar-marker ' + (user.isOnline ? 'online' : '') + '">' +
           '<img src="' + escapeValue(user.avatar) + '" alt="' + escapeValue(user.name) + '">' +
@@ -327,6 +338,10 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
         drawUsers(nextData.users || []);
         drawRoute(nextData.routeTarget, nextLocation);
 
+        if (!nextData.routeTarget) {
+          centerOnCurrent(nextLocation);
+        }
+
         if ('trails' in nextData) {
           drawTrails(nextData.trails || {});
         }
@@ -352,6 +367,9 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
       });
 
       drawCurrent(initialData.currentLocation);
+      if (!initialData.routeTarget) {
+        centerOnCurrent(initialData.currentLocation);
+      }
       drawTrails(initialData.trails || {});
       drawUsers(initialData.users || []);
       drawRoute(initialData.routeTarget, initialData.currentLocation);

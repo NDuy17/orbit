@@ -17,6 +17,14 @@ function mapLocationCoords(location) {
   };
 }
 
+async function ensureForegroundLocationPermission() {
+  const { status } = await Location.requestForegroundPermissionsAsync();
+
+  if (status !== 'granted') {
+    throw new Error('LOCATION_PERMISSION_DENIED');
+  }
+}
+
 function isMissingColumnError(error) {
   const message = String(error?.message || '').toLowerCase();
   return message.includes('column') && message.includes('does not exist');
@@ -136,11 +144,7 @@ function normalizeLocationUser(row, friendIds) {
 }
 
 export async function getDeviceLocation() {
-  const { status } = await Location.requestForegroundPermissionsAsync();
-
-  if (status !== 'granted') {
-    throw new Error('LOCATION_PERMISSION_DENIED');
-  }
+  await ensureForegroundLocationPermission();
 
   const location = await Location.getCurrentPositionAsync({});
 
@@ -148,11 +152,7 @@ export async function getDeviceLocation() {
 }
 
 export async function getFastDeviceLocation() {
-  const { status } = await Location.requestForegroundPermissionsAsync();
-
-  if (status !== 'granted') {
-    throw new Error('LOCATION_PERMISSION_DENIED');
-  }
+  await ensureForegroundLocationPermission();
 
   const lastKnownLocation = await Location.getLastKnownPositionAsync({
     maxAge: 5 * 60 * 1000,
@@ -168,6 +168,24 @@ export async function getFastDeviceLocation() {
   });
 
   return mapLocationCoords(location);
+}
+
+export async function watchDeviceLocation(onLocation, onError) {
+  await ensureForegroundLocationPermission();
+
+  const subscription = await Location.watchPositionAsync(
+    {
+      accuracy: Location.Accuracy.High,
+      distanceInterval: 5,
+      timeInterval: 3000,
+    },
+    (location) => {
+      onLocation(mapLocationCoords(location));
+    },
+    onError
+  );
+
+  return () => subscription.remove();
 }
 
 export async function saveCurrentUserLocation({ userId, ghostMode, approximateLocation, coords }) {

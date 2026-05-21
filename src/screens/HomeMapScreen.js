@@ -12,6 +12,7 @@ import {
   getFastDeviceLocation,
   saveCurrentUserLocation,
   subscribeToLocations,
+  watchDeviceLocation,
 } from '../services/locationService';
 import useLocationStore from '../store/locationStore';
 import useUserStore from '../store/userStore';
@@ -109,6 +110,13 @@ export default function HomeMapScreen({ navigation }) {
 
   useEffect(() => {
     let active = true;
+    let stopWatching = null;
+
+    function applyDeviceLocation(location) {
+      latestLocation.current = location;
+      setCurrentLocation(location);
+      setLocationReady(true);
+    }
 
     async function centerMapOnUser() {
       setLocationLoading(true);
@@ -116,15 +124,35 @@ export default function HomeMapScreen({ navigation }) {
       try {
         const fastLocation = await getFastDeviceLocation();
         if (active) {
-          latestLocation.current = fastLocation;
-          setCurrentLocation(fastLocation);
-          setLocationReady(true);
+          applyDeviceLocation(fastLocation);
         }
 
-        const accurateLocation = await getDeviceLocation();
+        const unsubscribeDeviceLocation = await watchDeviceLocation(
+          (nextLocation) => {
+            if (active) {
+              applyDeviceLocation(nextLocation);
+            }
+          },
+          (reason) => {
+            if (active) {
+              setLocationError(getVietnameseErrorMessage(reason));
+            }
+          }
+        );
+
         if (active) {
-          latestLocation.current = accurateLocation;
-          setCurrentLocation(accurateLocation);
+          stopWatching = unsubscribeDeviceLocation;
+        } else {
+          unsubscribeDeviceLocation();
+        }
+
+        try {
+          const accurateLocation = await getDeviceLocation();
+          if (active) {
+            applyDeviceLocation(accurateLocation);
+          }
+        } catch {
+          // The live watcher already keeps the map moving; this one-time precise fix is best effort.
         }
       } catch (err) {
         if (active) {
@@ -142,6 +170,7 @@ export default function HomeMapScreen({ navigation }) {
 
     return () => {
       active = false;
+      stopWatching?.();
     };
   }, [retryKey, setCurrentLocation, setLocationError, setLocationLoading]);
 
@@ -217,6 +246,10 @@ export default function HomeMapScreen({ navigation }) {
     }
 
     refreshLocations({ shouldSaveLocation: true });
+    const interval = setInterval(() => {
+      refreshLocations({ shouldSaveLocation: true });
+    }, 15000);
+
     const unsubscribe = subscribeToLocations((payload) => {
       const changedUserId = payload?.new?.user_id || payload?.old?.user_id;
       if (changedUserId === currentUser.id) {
@@ -237,6 +270,7 @@ export default function HomeMapScreen({ navigation }) {
       if (refreshTimer.current) {
         clearTimeout(refreshTimer.current);
       }
+      clearInterval(interval);
       unsubscribe();
     };
   }, [
@@ -284,20 +318,22 @@ export default function HomeMapScreen({ navigation }) {
       />
 
       <SafeAreaView style={styles.floating}>
-        <GlassCard style={styles.topCard}>
-          <Text style={styles.cardTitle}>Radar quanh bạn</Text>
-          <View style={styles.metricsRow}>
-            <Text style={styles.metricText}>{users.length} gần bạn</Text>
-            <Text style={styles.metricText}>{onlineFriendCount} bạn online</Text>
-            <Text style={styles.metricText}>{privacyLabel}</Text>
-          </View>
-          <Text style={styles.cardText}>
-            {locationLoading ? 'Đang lấy vị trí của bạn...' : 'Đang quét quanh bạn...'}
-          </Text>
-        </GlassCard>
+        <AutoHideNotice>
+          <GlassCard style={styles.topCard}>
+            <Text style={styles.cardTitle}>Radar quanh bạn</Text>
+            <View style={styles.metricsRow}>
+              <Text style={styles.metricText}>{users.length} gần bạn</Text>
+              <Text style={styles.metricText}>{onlineFriendCount} bạn online</Text>
+              <Text style={styles.metricText}>{privacyLabel}</Text>
+            </View>
+            <Text style={styles.cardText}>
+              {locationLoading ? 'Đang lấy vị trí của bạn...' : 'Đang quét quanh bạn...'}
+            </Text>
+          </GlassCard>
+        </AutoHideNotice>
 
         {!isBackendReady ? (
-          <AutoHideNotice delay={5600} style={styles.clusterNotice}>
+          <AutoHideNotice style={styles.clusterNotice}>
             <GlassCard style={styles.clusterCard}>
               <Text style={styles.cardTitle}>{clusterLocation.title}</Text>
               <Text style={styles.cardText}>Một nhóm nhỏ đang hoạt động trong bán kính 500m.</Text>

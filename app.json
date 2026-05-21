@@ -26,7 +26,13 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-font"
+      "expo-font",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Cho phép Orbit dùng vị trí của bạn để hiển thị bạn ở giữa bản đồ và cập nhật đường đi."
+        }
+      ]
     ]
   }
 }

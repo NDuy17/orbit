@@ -10,13 +10,13 @@ export default function AutoHideNotice({ children, delay = 5000, style }) {
       Animated.timing(opacity, {
         toValue: 1,
         duration: 450,
-        useNativeDriver: false,
+        useNativeDriver: true,
       }),
       Animated.delay(delay),
       Animated.timing(opacity, {
         toValue: 0,
         duration: 650,
-        useNativeDriver: false,
+        useNativeDriver: true,
       }),
     ]).start(() => setVisible(false));
   }, [delay, opacity]);
