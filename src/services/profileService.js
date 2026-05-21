@@ -1,14 +1,14 @@
-import { requireSupabase, supabase } from './supabase';
 import DEFAULT_AVATAR_URL from '../constants/defaultAvatar';
+import { requireSupabase, supabase } from './supabase';
 
 function formatLastActiveTime(value) {
   if (!value) {
-    return 'Vừa hoạt động';
+    return 'vừa xong';
   }
 
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return 'Vừa hoạt động';
+    return 'vừa xong';
   }
 
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -21,7 +21,7 @@ export function mapProfileRow(row) {
 
   return {
     id: row.id,
-    name: row.name || row.full_name || 'Người dùng Orbit',
+    name: row.full_name || row.username || row.name || 'Người dùng Orbit',
     avatar: row.avatar_url || DEFAULT_AVATAR_URL,
     avatar_url: row.avatar_url,
     bio: row.bio || '',
@@ -38,10 +38,11 @@ export async function createProfile(userId, profile) {
   const client = requireSupabase();
   const payload = {
     id: userId,
-    name: profile.name || 'Orbit user',
+    username: profile.username || null,
+    full_name: profile.name || profile.full_name || 'Người dùng Orbit',
     avatar_url: profile.avatar_url || profile.avatar || DEFAULT_AVATAR_URL,
     bio: profile.bio || '',
-    status: profile.status || 'Moi tham gia Orbit',
+    status: profile.status || 'Mới tham gia Orbit',
     is_online: true,
     last_active: new Date().toISOString(),
   };
@@ -84,7 +85,7 @@ export async function fetchProfileById(userId) {
 export async function updateProfile(userId, updates) {
   const client = requireSupabase();
   const payload = {
-    name: updates.name,
+    full_name: updates.name || updates.full_name,
     avatar_url: updates.avatar_url,
     bio: updates.bio,
     status: updates.status,

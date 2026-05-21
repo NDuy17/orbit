@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import GlassCard from '../components/GlassCard';
 import OrbitButton from '../components/OrbitButton';
@@ -63,6 +63,10 @@ export default function ProfileScreen({ navigation, route }) {
     navigation.replace('Login');
   }
 
+  function handleEditProfile() {
+    Alert.alert('Sắp có', 'Tính năng chỉnh sửa hồ sơ sẽ sớm ra mắt!');
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
@@ -96,7 +100,7 @@ export default function ProfileScreen({ navigation, route }) {
         </View>
         {isOwnProfile ? (
           <>
-            <OrbitButton title="Chỉnh sửa hồ sơ" variant="ghost" />
+            <OrbitButton title="Chỉnh sửa hồ sơ" variant="ghost" onPress={handleEditProfile} />
             <OrbitButton title="Đăng xuất" variant="ghost" onPress={handleLogout} />
           </>
         ) : (

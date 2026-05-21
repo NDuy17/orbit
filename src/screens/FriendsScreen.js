@@ -1,8 +1,9 @@
-import React, { useEffect } from 'react';
+import React, { useCallback, useRef } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import UserListItem from '../components/UserListItem';
 import UserAvatar from '../components/UserAvatar';
+import UserListItem from '../components/UserListItem';
 import useUserStore from '../store/userStore';
 import colors from '../theme/colors';
 import spacing from '../theme/spacing';
@@ -13,20 +14,34 @@ export default function FriendsScreen({ navigation }) {
     friends,
     pendingRequests,
     backendLoading,
+    friendActionLoading,
     error,
-    loadFriends,
-    loadPendingRequests,
+    isBackendReady,
+    refreshFriendData,
     acceptRequest,
     rejectRequest,
   } = useUserStore();
+  const lastFetchRef = useRef(0);
 
-  useEffect(() => {
-    loadFriends();
-    loadPendingRequests();
-  }, [loadFriends, loadPendingRequests]);
+  useFocusEffect(
+    useCallback(() => {
+      const now = Date.now();
+      if (now - lastFetchRef.current < 30000) {
+        return undefined;
+      }
+
+      lastFetchRef.current = now;
+      if (isBackendReady) {
+        refreshFriendData();
+      }
+
+      return undefined;
+    }, [isBackendReady, refreshFriendData])
+  );
 
   function renderPendingRequest(request) {
     const sender = request.sender || {};
+    const loading = Boolean(friendActionLoading[request.sender_id]);
 
     return (
       <View style={styles.requestCard}>
@@ -35,10 +50,18 @@ export default function FriendsScreen({ navigation }) {
           <Text style={styles.requestName}>{sender.name || sender.full_name || 'Người dùng Orbit'}</Text>
           <Text style={styles.requestText}>Muốn kết bạn với bạn</Text>
           <View style={styles.requestActions}>
-            <Pressable style={styles.acceptButton} onPress={() => acceptRequest(request.id)}>
-              <Text style={styles.acceptText}>Chấp nhận</Text>
+            <Pressable
+              disabled={loading}
+              style={[styles.acceptButton, loading && styles.disabledButton]}
+              onPress={() => acceptRequest(request.id)}
+            >
+              <Text style={styles.acceptText}>{loading ? 'Đang xử lý...' : 'Chấp nhận'}</Text>
             </Pressable>
-            <Pressable style={styles.rejectButton} onPress={() => rejectRequest(request.id)}>
+            <Pressable
+              disabled={loading}
+              style={[styles.rejectButton, loading && styles.disabledButton]}
+              onPress={() => rejectRequest(request.id)}
+            >
               <Text style={styles.rejectText}>Từ chối</Text>
             </Pressable>
           </View>
@@ -50,26 +73,28 @@ export default function FriendsScreen({ navigation }) {
   return (
     <SafeAreaView style={styles.container}>
       <Text style={styles.title}>Bạn bè</Text>
-      {backendLoading ? <Text style={styles.notice}>Đang tải...</Text> : null}
+      {backendLoading ? <Text style={styles.notice}>Đang đồng bộ bạn bè...</Text> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
       {pendingRequests.length ? (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Lời mời kết bạn</Text>
-          {pendingRequests.map((request) => (
-            <View key={request.id}>{renderPendingRequest(request)}</View>
+          {pendingRequests.map((request, index) => (
+            <View key={String(request.id || `request-${request.sender_id || 'unknown'}-${request.created_at || index}`)}>
+              {renderPendingRequest(request)}
+            </View>
           ))}
         </View>
       ) : null}
 
       <FlatList
         data={friends}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item, index) => String(item.id || `friend-${item.updated_at || index}`)}
         ListHeaderComponent={<Text style={styles.sectionTitle}>Danh sách bạn bè</Text>}
         ListEmptyComponent={
           <View style={styles.emptyBox}>
             <Text style={styles.emptyTitle}>Chưa có bạn bè</Text>
-            <Text style={styles.emptyText}>Vào tab Gần đây hoặc Bản đồ để gửi lời mời kết bạn.</Text>
+            <Text style={styles.emptyText}>Gửi lời mời từ Bản đồ hoặc Người gần đây. Khi họ chấp nhận, họ sẽ xuất hiện ở đây.</Text>
           </View>
         }
         renderItem={({ item }) => (
@@ -161,6 +186,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.line,
   },
+  disabledButton: {
+    opacity: 0.55,
+  },
   acceptText: {
     color: colors.text,
     fontWeight: '800',
@@ -173,7 +201,7 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xxl,
   },
   emptyBox: {
-    padding: spacing.lg,
+    padding: spacing.xl,
     borderRadius: 18,
     backgroundColor: colors.card,
     borderWidth: 1,
@@ -181,7 +209,7 @@ const styles = StyleSheet.create({
   },
   emptyTitle: {
     color: colors.text,
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '800',
     marginBottom: spacing.sm,
   },

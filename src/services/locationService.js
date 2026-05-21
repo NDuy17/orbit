@@ -17,6 +17,104 @@ function mapLocationCoords(location) {
   };
 }
 
+function isMissingColumnError(error) {
+  const message = String(error?.message || '').toLowerCase();
+  return message.includes('column') && message.includes('does not exist');
+}
+
+function isMissingConflictTargetError(error) {
+  const message = String(error?.message || '').toLowerCase();
+  return (
+    message.includes('no unique') ||
+    message.includes('exclusion constraint') ||
+    message.includes('on conflict')
+  );
+}
+
+function getBaseLocationPayload(payload) {
+  const { public_latitude, public_longitude, is_approximate, ...basePayload } = payload;
+
+  if (is_approximate && public_latitude !== undefined && public_longitude !== undefined) {
+    basePayload.latitude = public_latitude;
+    basePayload.longitude = public_longitude;
+  }
+
+  return basePayload;
+}
+
+async function updateOrInsertLocation(client, payload) {
+  const { data: existingRows, error: selectError } = await client
+    .from('locations')
+    .select('id')
+    .eq('user_id', payload.user_id)
+    .order('updated_at', { ascending: false })
+    .limit(1);
+
+  if (selectError) {
+    throw selectError;
+  }
+
+  const existing = existingRows?.[0];
+
+  if (existing?.id) {
+    const { data, error } = await client
+      .from('locations')
+      .update(payload)
+      .eq('id', existing.id)
+      .select()
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    return data;
+  }
+
+  const { data, error } = await client.from('locations').insert(payload).select().single();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+async function saveLocationPayload(client, payload) {
+  let nextPayload = payload;
+  let { data, error } = await client
+    .from('locations')
+    .upsert(nextPayload, { onConflict: 'user_id' })
+    .select()
+    .single();
+
+  if (!error) {
+    return data;
+  }
+
+  if (isMissingColumnError(error)) {
+    nextPayload = getBaseLocationPayload(payload);
+    const retry = await client
+      .from('locations')
+      .upsert(nextPayload, { onConflict: 'user_id' })
+      .select()
+      .single();
+
+    data = retry.data;
+    error = retry.error;
+
+    if (!error) {
+      return data;
+    }
+  }
+
+  if (isMissingConflictTargetError(error)) {
+    return updateOrInsertLocation(client, nextPayload);
+  }
+
+  throw error;
+}
+
 function normalizeLocationUser(row, friendIds) {
   const profile = row.profile || {};
   const isFriend = friendIds.includes(row.user_id);
@@ -25,9 +123,9 @@ function normalizeLocationUser(row, friendIds) {
 
   return {
     id: row.user_id,
-    name: profile.name || profile.full_name || 'NgÆ°á»i dÃ¹ng Orbit',
+    name: profile.full_name || profile.username || profile.name || 'Người dùng Orbit',
     avatar: profile.avatar_url || DEFAULT_AVATAR_URL,
-    status: profile.status || 'Äang dÃ¹ng Orbit',
+    status: profile.status || 'Đang dùng Orbit',
     bio: profile.bio || '',
     isOnline: Boolean(profile.is_online),
     lastActive: profile.is_online ? 'Đang online' : 'Offline',
@@ -41,7 +139,7 @@ export async function getDeviceLocation() {
   const { status } = await Location.requestForegroundPermissionsAsync();
 
   if (status !== 'granted') {
-    return currentLocation;
+    throw new Error('LOCATION_PERMISSION_DENIED');
   }
 
   const location = await Location.getCurrentPositionAsync({});
@@ -53,7 +151,7 @@ export async function getFastDeviceLocation() {
   const { status } = await Location.requestForegroundPermissionsAsync();
 
   if (status !== 'granted') {
-    return currentLocation;
+    throw new Error('LOCATION_PERMISSION_DENIED');
   }
 
   const lastKnownLocation = await Location.getLastKnownPositionAsync({
@@ -76,12 +174,11 @@ export async function saveCurrentUserLocation({ userId, ghostMode, approximateLo
   const client = requireSupabase();
 
   if (ghostMode) {
-    await client
-      .from('locations')
-      .upsert(
-        { user_id: userId, is_visible: false, updated_at: new Date().toISOString() },
-        { onConflict: 'user_id' }
-      );
+    await saveLocationPayload(client, {
+      user_id: userId,
+      is_visible: false,
+      updated_at: new Date().toISOString(),
+    });
     return null;
   }
 
@@ -101,17 +198,7 @@ export async function saveCurrentUserLocation({ userId, ghostMode, approximateLo
     updated_at: new Date().toISOString(),
   };
 
-  const { data, error } = await client
-    .from('locations')
-    .upsert(payload, { onConflict: 'user_id' })
-    .select()
-    .single();
-
-  if (error) {
-    throw error;
-  }
-
-  return data;
+  return saveLocationPayload(client, payload);
 }
 
 export async function fetchVisibleNearbyUsers({ currentUserId, currentCoords, radius, friendIds = [] }) {
@@ -132,7 +219,7 @@ export async function fetchVisibleNearbyUsers({ currentUserId, currentCoords, ra
   if (profileIds.length) {
     const { data: profiles, error: profileError } = await client
       .from('profiles')
-      .select('id, name, full_name, avatar_url, bio, status, is_online, last_active')
+      .select('id, username, full_name, avatar_url, bio, status, is_online, last_active')
       .in('id', profileIds);
 
     if (profileError) {

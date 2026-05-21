@@ -7,8 +7,37 @@ import OrbitButton from './OrbitButton';
 import StatusBadge from './StatusBadge';
 import UserAvatar from './UserAvatar';
 
-export default function UserListItem({ user, onChat, onAddFriend, showFriendButton = true }) {
-  const canAddFriend = showFriendButton && !user.isFriend;
+export default function UserListItem({
+  user,
+  onChat,
+  onAddFriend,
+  onAcceptFriend,
+  showFriendButton = true,
+  loading = false,
+}) {
+  const friendshipStatus = user.friendshipStatus || (user.isFriend ? 'friends' : 'none');
+  const actionTitle = {
+    friends: 'Chat',
+    pending_sent: 'Đã gửi',
+    pending_received: 'Chấp nhận',
+    none: 'Kết bạn',
+  }[friendshipStatus];
+
+  function handleAction() {
+    if (friendshipStatus === 'friends') {
+      onChat?.();
+      return;
+    }
+
+    if (friendshipStatus === 'pending_received') {
+      onAcceptFriend?.();
+      return;
+    }
+
+    if (friendshipStatus === 'none') {
+      onAddFriend?.();
+    }
+  }
 
   return (
     <View style={styles.item}>
@@ -24,10 +53,18 @@ export default function UserListItem({ user, onChat, onAddFriend, showFriendButt
         <StatusBadge isOnline={user.isOnline} label={user.isOnline ? 'Đang online' : user.lastActive} />
       </View>
       <View style={styles.actions}>
-        {canAddFriend ? (
-          <OrbitButton title="Kết bạn" variant="ghost" onPress={onAddFriend} style={styles.smallButton} />
+        {showFriendButton ? (
+          <OrbitButton
+            title={loading ? '...' : actionTitle}
+            variant={friendshipStatus === 'friends' ? 'primary' : 'ghost'}
+            onPress={handleAction}
+            disabled={loading || friendshipStatus === 'pending_sent'}
+            style={styles.smallButton}
+          />
         ) : null}
-        <OrbitButton title="Chat" onPress={onChat} style={styles.smallButton} />
+        {friendshipStatus !== 'friends' || !showFriendButton ? (
+          <OrbitButton title="Chat" onPress={onChat} style={styles.smallButton} />
+        ) : null}
       </View>
     </View>
   );

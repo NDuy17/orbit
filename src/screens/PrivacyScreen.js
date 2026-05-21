@@ -48,7 +48,7 @@ export default function PrivacyScreen() {
         <View style={styles.radiusRow}>
           {radiusOptions.map((item) => (
             <Pressable
-              key={item}
+              key={`radius-${item}`}
               onPress={() => setRadius(item)}
               style={[styles.radiusChip, radius === item && styles.activeRadius]}
             >

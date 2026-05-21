@@ -1,28 +1,88 @@
-import React, { useEffect } from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import OrbitButton from '../components/OrbitButton';
 import colors from '../theme/colors';
 import spacing from '../theme/spacing';
 import typography from '../theme/typography';
 
-export default function OnboardingScreen({ navigation }) {
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      navigation.replace('Login');
-    }, 5000);
+const valueCards = [
+  {
+    id: 'map',
+    title: 'Bản đồ sống',
+    text: 'Nhìn thấy bạn bè và người gần bạn theo thời gian thực.',
+  },
+  {
+    id: 'safe',
+    title: 'Kết nối an toàn',
+    text: 'Gửi lời mời, trò chuyện và gặp nhau khi cả hai cùng muốn.',
+  },
+  {
+    id: 'privacy',
+    title: 'Riêng tư chủ động',
+    text: 'Ẩn vị trí, làm mờ tọa độ hoặc giới hạn bán kính hiển thị.',
+  },
+];
 
-    return () => clearTimeout(timer);
+export default function OnboardingScreen({ navigation }) {
+  const timerRef = useRef(null);
+
+  useEffect(() => {
+    timerRef.current = setTimeout(() => navigation.replace('Login'), 5000);
+
+    return () => clearTimeout(timerRef.current);
   }, [navigation]);
+
+  function clearAutoRedirect() {
+    clearTimeout(timerRef.current);
+  }
+
+  function handleStart() {
+    clearAutoRedirect();
+    navigation.replace('Login');
+  }
+
+  function handleRegister() {
+    clearAutoRedirect();
+    navigation.navigate('Register');
+  }
+
+  function handleLogin() {
+    clearAutoRedirect();
+    navigation.replace('Login');
+  }
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.iconWrap}>
-        <View style={styles.orbitRing} />
-        <View style={styles.orbitRingSmall} />
-        <View style={styles.planet} />
+      <View style={styles.hero}>
+        <View style={styles.iconWrap}>
+          <View style={styles.orbitRing} />
+          <View style={styles.orbitRingSmall} />
+          <View style={styles.planet} />
+        </View>
+        <Text style={styles.name}>Orbit</Text>
+        <Text style={styles.headline}>Những người gần bạn, hiện lên như một quỹ đạo.</Text>
+        <Text style={styles.tagline}>Mở bản đồ, khám phá ai đang ở gần và kết nối khi đúng khoảnh khắc.</Text>
+        <OrbitButton title="Bắt đầu →" onPress={handleStart} style={styles.heroButton} />
       </View>
-      <Text style={styles.name}>Orbit</Text>
-      <Text style={styles.tagline}>Bản đồ kết nối quanh bạn</Text>
+
+      <View style={styles.cards}>
+        {valueCards.map((item) => (
+          <View key={item.id} style={styles.card}>
+            <Text style={styles.cardTitle}>{item.title}</Text>
+            <Text style={styles.cardText}>{item.text}</Text>
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.actions}>
+        <Pressable style={styles.primaryButton} onPress={handleRegister}>
+          <Text style={styles.primaryText}>Bắt đầu</Text>
+        </Pressable>
+        <Pressable style={styles.secondaryButton} onPress={handleLogin}>
+          <Text style={styles.secondaryText}>Đăng nhập</Text>
+        </Pressable>
+      </View>
     </SafeAreaView>
   );
 }
@@ -32,30 +92,33 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
     padding: spacing.xl,
+    justifyContent: 'space-between',
+  },
+  hero: {
     alignItems: 'center',
-    justifyContent: 'center',
+    marginTop: spacing.xxl,
   },
   iconWrap: {
-    width: 160,
-    height: 160,
+    width: 168,
+    height: 168,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing.xxl,
+    marginBottom: spacing.xl,
   },
   orbitRing: {
     position: 'absolute',
-    width: 150,
-    height: 150,
-    borderRadius: 75,
+    width: 158,
+    height: 158,
+    borderRadius: 79,
     borderWidth: 2,
     borderColor: 'rgba(34, 211, 238, 0.5)',
     transform: [{ rotate: '-18deg' }],
   },
   orbitRingSmall: {
     position: 'absolute',
-    width: 102,
-    height: 102,
-    borderRadius: 51,
+    width: 108,
+    height: 108,
+    borderRadius: 54,
     borderWidth: 2,
     borderColor: 'rgba(124, 58, 237, 0.75)',
     transform: [{ rotate: '22deg' }],
@@ -82,11 +145,70 @@ const styles = StyleSheet.create({
     color: colors.text,
     textAlign: 'center',
   },
+  headline: {
+    color: colors.text,
+    fontSize: 24,
+    fontWeight: '900',
+    textAlign: 'center',
+    lineHeight: 31,
+    marginTop: spacing.lg,
+  },
   tagline: {
     color: colors.muted,
-    fontSize: 17,
-    fontWeight: '700',
+    fontSize: 15,
     textAlign: 'center',
-    marginTop: spacing.sm,
+    lineHeight: 22,
+    marginTop: spacing.md,
+  },
+  heroButton: {
+    alignSelf: 'stretch',
+    marginTop: spacing.lg,
+  },
+  cards: {
+    gap: spacing.md,
+  },
+  card: {
+    padding: spacing.lg,
+    borderRadius: 18,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  cardTitle: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  cardText: {
+    color: colors.muted,
+    lineHeight: 20,
+  },
+  actions: {
+    gap: spacing.md,
+  },
+  primaryButton: {
+    minHeight: 52,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primary,
+  },
+  secondaryButton: {
+    minHeight: 52,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accentSoft,
+    borderWidth: 1,
+    borderColor: colors.accent,
+  },
+  primaryText: {
+    color: colors.text,
+    fontWeight: '900',
+  },
+  secondaryText: {
+    color: colors.accent,
+    fontWeight: '900',
   },
 });

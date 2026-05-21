@@ -5,6 +5,10 @@ export function getVietnameseErrorMessage(message) {
 
   const text = String(message).toLowerCase();
 
+  if (text.includes('location_permission_denied') || text.includes('permission')) {
+    return 'Orbit cần quyền vị trí để hiển thị bạn trên bản đồ. Hãy bật quyền rồi thử lại.';
+  }
+
   if (text.includes('invalid login credentials')) {
     return 'Email hoặc mật khẩu chưa đúng.';
   }
@@ -25,8 +29,8 @@ export function getVietnameseErrorMessage(message) {
     return 'Email này đã được dùng để đăng ký.';
   }
 
-  if (text.includes('rate limit') || text.includes('security purposes') || text.includes('after') && text.includes('seconds')) {
-    return 'Supabase đang chặn tạm do bảo mật. Thường là do gửi email xác nhận quá nhiều lần. Chờ một chút hoặc tắt xác nhận email khi test.';
+  if (text.includes('rate limit') || text.includes('security purposes') || (text.includes('after') && text.includes('seconds'))) {
+    return 'Supabase đang chặn tạm do bảo mật. Chờ một chút hoặc tắt xác nhận email khi test.';
   }
 
   if (text.includes('confirmation') && text.includes('email')) {
@@ -61,11 +65,7 @@ export function getVietnameseErrorMessage(message) {
     return 'Chưa cấu hình đầy đủ Supabase.';
   }
 
-  if (text.includes('location') || text.includes('permission')) {
-    return 'Ứng dụng chưa có quyền truy cập vị trí.';
-  }
-
-  if (text.includes('row-level security') || text.includes('rls')) {
+  if (text.includes('row-level security') || text.includes('rls') || text.includes('forbidden')) {
     return 'Bạn chưa có quyền thực hiện thao tác này. Hãy kiểm tra RLS trong Supabase.';
   }
 

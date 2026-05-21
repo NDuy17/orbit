@@ -23,6 +23,7 @@ const mockUsers = [
     lastActive: 'Đang hoạt động',
     distance: 120,
     isFriend: true,
+    friendshipStatus: 'friends',
     location: { latitude: 10.7777, longitude: 106.7015 },
   },
   {
@@ -35,6 +36,7 @@ const mockUsers = [
     lastActive: 'Đang hoạt động',
     distance: 260,
     isFriend: false,
+    friendshipStatus: 'none',
     location: { latitude: 10.7765, longitude: 106.7004 },
   },
   {
@@ -47,6 +49,7 @@ const mockUsers = [
     lastActive: '15 phút trước',
     distance: 480,
     isFriend: true,
+    friendshipStatus: 'friends',
     location: { latitude: 10.7748, longitude: 106.6998 },
   },
   {
@@ -59,6 +62,7 @@ const mockUsers = [
     lastActive: 'Đang hoạt động',
     distance: 690,
     isFriend: false,
+    friendshipStatus: 'none',
     location: { latitude: 10.7789, longitude: 106.7018 },
   },
   {
@@ -71,6 +75,7 @@ const mockUsers = [
     lastActive: '1 giờ trước',
     distance: 940,
     isFriend: true,
+    friendshipStatus: 'friends',
     location: { latitude: 10.7811, longitude: 106.7052 },
   },
 ];

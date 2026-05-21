@@ -13,9 +13,19 @@ import { isWithinRadius } from '../utils/distance';
 const radiusOptions = [100, 500, 1000];
 
 export default function NearbyScreen({ navigation }) {
-  const { users, friends, requestFriend, loadFriends, isBackendReady, error } = useUserStore();
+  const {
+    users,
+    friends,
+    requestFriend,
+    acceptRequestForUser,
+    friendActionLoading,
+    loadFriends,
+    isBackendReady,
+    error,
+  } = useUserStore();
   const { radius, setRadius } = useLocationStore();
   const friendIds = useMemo(() => friends.map((friend) => friend.id), [friends]);
+
   useFocusEffect(
     useCallback(() => {
       if (isBackendReady) {
@@ -27,9 +37,9 @@ export default function NearbyScreen({ navigation }) {
   const filteredUsers = useMemo(
     () =>
       users.filter(
-        (user) => isWithinRadius(user, radius) && !user.isFriend && !friendIds.includes(user.id)
+        (user) => isWithinRadius(user, radius) && user.friendshipStatus !== 'friends' && !friendIds.includes(user.id)
       ),
-    [friendIds, users, radius]
+    [friendIds, radius, users]
   );
 
   return (
@@ -39,7 +49,7 @@ export default function NearbyScreen({ navigation }) {
       <View style={styles.filters}>
         {radiusOptions.map((item) => (
           <Pressable
-            key={item}
+            key={`radius-${item}`}
             onPress={() => setRadius(item)}
             style={[styles.chip, radius === item && styles.activeChip]}
           >
@@ -51,18 +61,20 @@ export default function NearbyScreen({ navigation }) {
       </View>
       <FlatList
         data={filteredUsers}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item, index) => String(item.id || `nearby-${item.updated_at || index}`)}
         ListEmptyComponent={
           <View style={styles.emptyBox}>
             <Text style={styles.emptyTitle}>Chưa có ai gần đây</Text>
-            <Text style={styles.emptyText}>Khi người dùng khác đăng nhập và chia sẻ vị trí, họ sẽ hiện ở đây.</Text>
+            <Text style={styles.emptyText}>Orbit đang quét quanh bạn. Khi có người chia sẻ vị trí, họ sẽ xuất hiện ở đây.</Text>
           </View>
         }
         renderItem={({ item }) => (
           <UserListItem
             user={item}
             onAddFriend={() => requestFriend(item.id)}
+            onAcceptFriend={() => acceptRequestForUser(item.id)}
             onChat={() => navigation.navigate('Chat', { userId: item.id })}
+            loading={Boolean(friendActionLoading[item.id])}
           />
         )}
         contentContainerStyle={styles.list}
@@ -115,7 +127,7 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xxl,
   },
   emptyBox: {
-    padding: spacing.lg,
+    padding: spacing.xl,
     borderRadius: 18,
     backgroundColor: colors.card,
     borderWidth: 1,
@@ -123,7 +135,7 @@ const styles = StyleSheet.create({
   },
   emptyTitle: {
     color: colors.text,
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '800',
     marginBottom: spacing.sm,
   },

@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AutoHideNotice from '../components/AutoHideNotice';
 import GlassCard from '../components/GlassCard';
@@ -21,6 +21,34 @@ import { getVietnameseErrorMessage } from '../utils/errorMessages';
 
 const emptyTrails = {};
 
+function toMapUser(user) {
+  return {
+    id: user.id,
+    name: user.name,
+    avatar: user.avatar,
+    isOnline: user.isOnline,
+    location: user.location,
+  };
+}
+
+function areMapUsersEqual(nextUsers, currentUsers) {
+  if (nextUsers.length !== currentUsers.length) {
+    return false;
+  }
+
+  return nextUsers.every((user, index) => {
+    const current = currentUsers[index];
+    return (
+      current &&
+      user.id === current.id &&
+      user.name === current.name &&
+      user.avatar === current.avatar &&
+      user.location?.latitude === current.location?.latitude &&
+      user.location?.longitude === current.location?.longitude
+    );
+  });
+}
+
 export default function HomeMapScreen({ navigation }) {
   const {
     currentUser,
@@ -30,8 +58,12 @@ export default function HomeMapScreen({ navigation }) {
     setUsers,
     setSelectedUser,
     clearSelectedUser,
-    requestFriend,
+    acceptRequestForUser,
+    actionNotice,
+    clearActionNotice,
+    friendActionLoading,
     loadFriends,
+    requestFriend,
     isBackendReady,
     error,
   } = useUserStore();
@@ -40,26 +72,47 @@ export default function HomeMapScreen({ navigation }) {
     radius,
     ghostMode,
     approximateLocation,
+    locationLoading,
     locationError,
     setCurrentLocation,
     setLocationError,
+    setLocationLoading,
   } = useLocationStore();
   const refreshTimer = useRef(null);
   const latestLocation = useRef(currentLocation);
   const [locationReady, setLocationReady] = useState(false);
   const [routeTarget, setRouteTarget] = useState(null);
-  const mapUsersKey = users
-    .map(
-      (user) =>
-        `${user.id}:${user.name}:${user.avatar}:${user.location?.latitude}:${user.location?.longitude}`
-    )
-    .join('|');
-  const mapUsers = useMemo(() => users.map((user) => ({ ...user })), [mapUsersKey]);
+  const [retryKey, setRetryKey] = useState(0);
+  const [mapUsers, setMapUsers] = useState([]);
+  const onlineFriendCount = friends.filter((friend) => friend.isOnline).length;
+  const privacyLabel = ghostMode ? 'Ẩn vị trí' : approximateLocation ? 'Vị trí gần đúng' : 'Vị trí chính xác';
+  const friendIdsKey = useMemo(
+    () => friends.map((friend) => friend.id).filter(Boolean).sort().join('|'),
+    [friends]
+  );
+  const friendIds = useMemo(() => (friendIdsKey ? friendIdsKey.split('|') : []), [friendIdsKey]);
+
+  useEffect(() => {
+    const nextMapUsers = users.map(toMapUser);
+    setMapUsers((currentMapUsers) =>
+      areMapUsersEqual(nextMapUsers, currentMapUsers) ? currentMapUsers : nextMapUsers
+    );
+  }, [users]);
+
+  const handleSelectUserFromMap = useCallback(
+    (mapUser) => {
+      const fullUser = users.find((item) => item.id === mapUser?.id);
+      setSelectedUser(fullUser || mapUser);
+    },
+    [setSelectedUser, users]
+  );
 
   useEffect(() => {
     let active = true;
 
     async function centerMapOnUser() {
+      setLocationLoading(true);
+      setLocationError(null);
       try {
         const fastLocation = await getFastDeviceLocation();
         if (active) {
@@ -74,7 +127,14 @@ export default function HomeMapScreen({ navigation }) {
           setCurrentLocation(accurateLocation);
         }
       } catch (err) {
-        setLocationError(getVietnameseErrorMessage(err.message));
+        if (active) {
+          setLocationReady(false);
+          setLocationError(getVietnameseErrorMessage(err.message));
+        }
+      } finally {
+        if (active) {
+          setLocationLoading(false);
+        }
       }
     }
 
@@ -83,13 +143,22 @@ export default function HomeMapScreen({ navigation }) {
     return () => {
       active = false;
     };
-  }, [setCurrentLocation, setLocationError]);
+  }, [retryKey, setCurrentLocation, setLocationError, setLocationLoading]);
 
   useEffect(() => {
     if (isBackendReady) {
       loadFriends();
     }
   }, [isBackendReady, loadFriends]);
+
+  useEffect(() => {
+    if (!actionNotice) {
+      return undefined;
+    }
+
+    const timer = setTimeout(clearActionNotice, 2200);
+    return () => clearTimeout(timer);
+  }, [actionNotice, clearActionNotice]);
 
   useEffect(() => {
     if (!routeTarget) {
@@ -115,7 +184,6 @@ export default function HomeMapScreen({ navigation }) {
     }
 
     let active = true;
-    const friendIds = friends.map((friend) => friend.id);
 
     async function refreshLocations({ shouldSaveLocation = false } = {}) {
       try {
@@ -125,8 +193,6 @@ export default function HomeMapScreen({ navigation }) {
         }
 
         if (shouldSaveLocation) {
-          latestLocation.current = deviceLocation;
-          setCurrentLocation(deviceLocation);
           await saveCurrentUserLocation({
             userId: currentUser.id,
             ghostMode,
@@ -142,13 +208,10 @@ export default function HomeMapScreen({ navigation }) {
           friendIds,
         });
 
-        if (!active) {
-          return;
+        if (active) {
+          setUsers(nearbyUsers);
         }
-
-        setUsers(nearbyUsers);
       } catch (err) {
-        setUsers([]);
         setLocationError(getVietnameseErrorMessage(err.message));
       }
     }
@@ -179,15 +242,35 @@ export default function HomeMapScreen({ navigation }) {
   }, [
     approximateLocation,
     currentUser?.id,
-    friends,
+    friendIds,
+    friendIdsKey,
     ghostMode,
     isBackendReady,
     locationReady,
     radius,
-    setCurrentLocation,
     setLocationError,
     setUsers,
   ]);
+
+  function handleFriendAction() {
+    if (!selectedUser) {
+      return;
+    }
+
+    if (selectedUser.friendshipStatus === 'friends') {
+      navigation.navigate('Chat', { userId: selectedUser.id });
+      return;
+    }
+
+    if (selectedUser.friendshipStatus === 'pending_received') {
+      acceptRequestForUser(selectedUser.id);
+      return;
+    }
+
+    if (!selectedUser.friendshipStatus || selectedUser.friendshipStatus === 'none') {
+      requestFriend(selectedUser.id);
+    }
+  }
 
   return (
     <View style={styles.container}>
@@ -197,17 +280,22 @@ export default function HomeMapScreen({ navigation }) {
         trails={isBackendReady ? emptyTrails : userTrails}
         clusterLocation={isBackendReady ? null : clusterLocation}
         routeTarget={routeTarget}
-        onSelectUser={setSelectedUser}
+        onSelectUser={handleSelectUserFromMap}
       />
+
       <SafeAreaView style={styles.floating}>
-        <AutoHideNotice>
-          <GlassCard style={styles.topCard}>
-            <Text style={styles.cardTitle}>Radar quanh bạn</Text>
-            <Text style={styles.cardText}>
-              {isBackendReady ? `${users.length} người thật đang hiển thị` : 'Đang dùng dữ liệu mẫu'}
-            </Text>
-          </GlassCard>
-        </AutoHideNotice>
+        <GlassCard style={styles.topCard}>
+          <Text style={styles.cardTitle}>Radar quanh bạn</Text>
+          <View style={styles.metricsRow}>
+            <Text style={styles.metricText}>{users.length} gần bạn</Text>
+            <Text style={styles.metricText}>{onlineFriendCount} bạn online</Text>
+            <Text style={styles.metricText}>{privacyLabel}</Text>
+          </View>
+          <Text style={styles.cardText}>
+            {locationLoading ? 'Đang lấy vị trí của bạn...' : 'Đang quét quanh bạn...'}
+          </Text>
+        </GlassCard>
+
         {!isBackendReady ? (
           <AutoHideNotice delay={5600} style={styles.clusterNotice}>
             <GlassCard style={styles.clusterCard}>
@@ -216,25 +304,31 @@ export default function HomeMapScreen({ navigation }) {
             </GlassCard>
           </AutoHideNotice>
         ) : null}
+
         {locationError || error ? (
           <GlassCard style={styles.errorCard}>
             <Text style={styles.errorText}>{locationError || error}</Text>
+            {locationError ? (
+              <Pressable style={styles.retryButton} onPress={() => setRetryKey((value) => value + 1)}>
+                <Text style={styles.retryText}>Thử lại vị trí</Text>
+              </Pressable>
+            ) : null}
           </GlassCard>
         ) : null}
       </SafeAreaView>
+
       <UserBottomSheet
         user={selectedUser}
         onClose={clearSelectedUser}
-        onChat={() => navigation.navigate('Chat', { userId: selectedUser?.id })}
         onProfile={() => navigation.navigate('UserProfile', { userId: selectedUser?.id })}
-        onAddFriend={() => selectedUser && requestFriend(selectedUser.id)}
+        onFriendAction={handleFriendAction}
         onDirections={() =>
           selectedUser &&
-          setRouteTarget((currentTarget) =>
-            currentTarget?.id === selectedUser.id ? null : selectedUser
-          )
+          setRouteTarget((currentTarget) => (currentTarget?.id === selectedUser.id ? null : selectedUser))
         }
         isDirectionsActive={routeTarget?.id === selectedUser?.id}
+        isFriendActionLoading={Boolean(friendActionLoading[selectedUser?.id])}
+        actionNotice={actionNotice}
       />
     </View>
   );
@@ -255,6 +349,22 @@ const styles = StyleSheet.create({
   },
   topCard: {
     alignSelf: 'stretch',
+    paddingVertical: spacing.md,
+  },
+  metricsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  metricText: {
+    color: colors.accent,
+    fontSize: 12,
+    fontWeight: '800',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: colors.accentSoft,
   },
   clusterCard: {
     alignSelf: 'flex-start',
@@ -272,7 +382,7 @@ const styles = StyleSheet.create({
   cardText: {
     color: colors.muted,
     fontSize: 13,
-    marginTop: 4,
+    marginTop: 6,
   },
   errorCard: {
     paddingVertical: spacing.md,
@@ -280,5 +390,19 @@ const styles = StyleSheet.create({
   errorText: {
     color: colors.danger,
     fontSize: 13,
+  },
+  retryButton: {
+    alignSelf: 'flex-start',
+    marginTop: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 999,
+    backgroundColor: colors.accentSoft,
+    borderWidth: 1,
+    borderColor: colors.accent,
+  },
+  retryText: {
+    color: colors.accent,
+    fontWeight: '800',
   },
 });

@@ -13,13 +13,24 @@ export default function UserBottomSheet({
   onClose,
   onChat,
   onProfile,
-  onAddFriend,
+  onFriendAction,
   onDirections,
   isDirectionsActive = false,
+  isFriendActionLoading = false,
+  actionNotice,
 }) {
   if (!user) {
     return null;
   }
+
+  const friendshipStatus = user.friendshipStatus || (user.isFriend ? 'friends' : 'none');
+  const friendActionTitle = {
+    friends: 'Nhắn tin',
+    pending_sent: 'Đã gửi lời mời',
+    pending_received: 'Chấp nhận lời mời',
+    none: 'Kết bạn',
+  }[friendshipStatus];
+  const friendActionDisabled = isFriendActionLoading || friendshipStatus === 'pending_sent';
 
   return (
     <View style={styles.overlay}>
@@ -39,19 +50,18 @@ export default function UserBottomSheet({
             </View>
           </View>
           <Text style={styles.bio}>{user.bio}</Text>
+          {actionNotice ? <Text style={styles.notice}>{actionNotice}</Text> : null}
           <View style={styles.actions}>
+            <OrbitButton
+              title={isFriendActionLoading ? 'Đang xử lý...' : friendActionTitle}
+              onPress={onFriendAction}
+              disabled={friendActionDisabled}
+              style={styles.actionButton}
+            />
             <OrbitButton
               title={isDirectionsActive ? 'Ẩn đường đi' : 'Dẫn đường'}
               variant="ghost"
               onPress={onDirections}
-              style={styles.actionButton}
-            />
-            <OrbitButton title="Nhắn tin" onPress={onChat} style={styles.actionButton} />
-            <OrbitButton
-              title={user.isFriend ? 'Đã là bạn' : 'Kết bạn'}
-              variant="ghost"
-              onPress={onAddFriend}
-              disabled={user.isFriend}
               style={styles.actionButton}
             />
             <OrbitButton title="Xem hồ sơ" variant="ghost" onPress={onProfile} style={styles.actionButton} />
@@ -126,6 +136,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 21,
     marginTop: spacing.lg,
+  },
+  notice: {
+    color: colors.accent,
+    fontSize: 13,
+    fontWeight: '700',
+    marginTop: spacing.sm,
   },
   actions: {
     flexDirection: 'row',

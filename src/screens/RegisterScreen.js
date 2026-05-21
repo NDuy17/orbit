@@ -66,7 +66,8 @@ export default function RegisterScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.title}>Đăng ký tài khoản</Text>
+      <Text style={styles.title}>Tạo tài khoản</Text>
+      <Text style={styles.subtitle}>Chỉ cần tên, email và mật khẩu để bắt đầu.</Text>
       <GlassCard style={styles.form}>
         <TextInput
           style={styles.input}
@@ -128,7 +129,11 @@ const styles = StyleSheet.create({
   title: {
     ...typography.heading,
     color: colors.text,
-    marginBottom: spacing.sm,
+  },
+  subtitle: {
+    color: colors.muted,
+    marginTop: spacing.sm,
+    marginBottom: spacing.lg,
   },
   form: {
     gap: spacing.md,

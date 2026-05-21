@@ -1,22 +1,19 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { Platform, StyleSheet } from 'react-native';
 import colors from '../theme/colors';
 
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+function serializeForScript(value) {
+  return JSON.stringify(value || null).replace(/</g, '\\u003c');
 }
 
 export function buildLeafletHtml({ users, currentLocation, trails, clusterLocation, routeTarget }) {
-  const safeUsers = JSON.stringify(users);
-  const safeCurrentLocation = JSON.stringify(currentLocation);
-  const safeTrails = JSON.stringify(trails || {});
-  const safeClusterLocation = JSON.stringify(clusterLocation);
-  const safeRouteTarget = JSON.stringify(routeTarget);
+  const initialData = serializeForScript({
+    users: users || [],
+    currentLocation,
+    trails: trails || {},
+    clusterLocation,
+    routeTarget,
+  });
 
   return `
 <!DOCTYPE html>
@@ -126,28 +123,57 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
     <div id="map"></div>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-      const users = ${safeUsers};
-      const currentLocation = ${safeCurrentLocation};
-      const trails = ${safeTrails};
-      const clusterLocation = ${safeClusterLocation};
-      const routeTarget = ${safeRouteTarget};
+      const initialData = ${initialData};
+      let userMarkers = [];
+      let routeLayers = [];
+      let trailLayers = [];
+      let currentMarker = null;
+      let currentCircle = null;
+      let clusterMarker = null;
+
+      function escapeValue(value) {
+        return String(value || '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
+      function hasLocation(value) {
+        return value && Number.isFinite(Number(value.latitude)) && Number.isFinite(Number(value.longitude));
+      }
+
+      function getLatLng(location) {
+        return [Number(location.latitude), Number(location.longitude)];
+      }
+
+      function clearLayers(layers) {
+        layers.forEach((layer) => map.removeLayer(layer));
+        layers.length = 0;
+      }
+
+      function postToApp(message) {
+        const value = JSON.stringify(message);
+        if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+          window.ReactNativeWebView.postMessage(value);
+        } else if (window.parent) {
+          window.parent.postMessage(value, '*');
+        }
+      }
+
+      const startLocation = hasLocation(initialData.currentLocation)
+        ? initialData.currentLocation
+        : { latitude: 21.0285, longitude: 105.8542 };
 
       const map = L.map('map', {
         zoomControl: false,
         attributionControl: true
-      }).setView([currentLocation.latitude, currentLocation.longitude], 15);
+      }).setView(getLatLng(startLocation), 15);
 
       L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution: '&copy; OpenStreetMap'
-      }).addTo(map);
-
-      L.circle([currentLocation.latitude, currentLocation.longitude], {
-        radius: 180,
-        color: 'rgba(34, 211, 238, 0.38)',
-        fillColor: 'rgba(34, 211, 238, 0.08)',
-        fillOpacity: 1,
-        weight: 1
       }).addTo(map);
 
       const currentIcon = L.divIcon({
@@ -157,14 +183,71 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
         iconAnchor: [17, 17]
       });
 
-      L.marker([currentLocation.latitude, currentLocation.longitude], { icon: currentIcon }).addTo(map);
+      function drawCurrent(location) {
+        if (!hasLocation(location)) {
+          return;
+        }
 
-      if (routeTarget && routeTarget.location) {
-        const routePoints = [
-          [currentLocation.latitude, currentLocation.longitude],
-          [routeTarget.location.latitude, routeTarget.location.longitude]
-        ];
+        const latLng = getLatLng(location);
+        if (currentMarker) {
+          currentMarker.setLatLng(latLng);
+        } else {
+          currentMarker = L.marker(latLng, { icon: currentIcon }).addTo(map);
+        }
 
+        if (currentCircle) {
+          currentCircle.setLatLng(latLng);
+        } else {
+          currentCircle = L.circle(latLng, {
+            radius: 180,
+            color: 'rgba(34, 211, 238, 0.38)',
+            fillColor: 'rgba(34, 211, 238, 0.08)',
+            fillOpacity: 1,
+            weight: 1
+          }).addTo(map);
+        }
+      }
+
+      function buildUserIcon(user) {
+        const iconHtml = '<div class="avatar-marker ' + (user.isOnline ? 'online' : '') + '">' +
+          '<img src="' + escapeValue(user.avatar) + '" alt="' + escapeValue(user.name) + '">' +
+          '<span class="status-dot" style="background:' + (user.isOnline ? '#22C55E' : '#64748B') + '"></span>' +
+        '</div>';
+
+        return L.divIcon({
+          html: iconHtml,
+          className: '',
+          iconSize: [58, 58],
+          iconAnchor: [29, 29]
+        });
+      }
+
+      function drawUsers(nextUsers) {
+        clearLayers(userMarkers);
+        (nextUsers || []).forEach((user) => {
+          if (!hasLocation(user.location)) {
+            return;
+          }
+
+          const marker = L.marker(getLatLng(user.location), {
+            icon: buildUserIcon(user)
+          }).addTo(map);
+
+          marker.on('click', () => {
+            postToApp({ type: 'selectUser', userId: user.id });
+          });
+
+          userMarkers.push(marker);
+        });
+      }
+
+      function drawRoute(nextRouteTarget, nextCurrentLocation) {
+        clearLayers(routeLayers);
+        if (!hasLocation(nextCurrentLocation) || !nextRouteTarget || !hasLocation(nextRouteTarget.location)) {
+          return;
+        }
+
+        const routePoints = [getLatLng(nextCurrentLocation), getLatLng(nextRouteTarget.location)];
         const routeLine = L.polyline(routePoints, {
           color: '#22D3EE',
           weight: 5,
@@ -173,7 +256,7 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
           lineCap: 'round'
         }).addTo(map);
 
-        L.circle(routePoints[0], {
+        const startCircle = L.circle(routePoints[0], {
           radius: 70,
           color: 'rgba(34, 211, 238, 0.75)',
           fillColor: 'rgba(34, 211, 238, 0.12)',
@@ -181,7 +264,7 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
           weight: 2
         }).addTo(map);
 
-        L.marker(routePoints[1], {
+        const meetMarker = L.marker(routePoints[1], {
           icon: L.divIcon({
             html: '<div class="meet-point"></div>',
             className: '',
@@ -190,55 +273,89 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
           })
         }).addTo(map);
 
+        routeLayers.push(routeLine, startCircle, meetMarker);
         map.fitBounds(routeLine.getBounds(), {
           padding: [80, 80],
           maxZoom: 17
         });
       }
 
-      Object.keys(trails).forEach((id) => {
-        L.polyline(trails[id].map((point) => [point.latitude, point.longitude]), {
-          color: 'rgba(34, 211, 238, 0.72)',
-          weight: 3,
-          opacity: 0.9
-        }).addTo(map);
-      });
-
-      users.forEach((user) => {
-        const iconHtml = '<div class="avatar-marker ' + (user.isOnline ? 'online' : '') + '">' +
-          '<img src="' + user.avatar + '" alt="' + user.name + '">' +
-          '<span class="status-dot" style="background:' + (user.isOnline ? '#22C55E' : '#64748B') + '"></span>' +
-        '</div>';
-
-        const marker = L.marker([user.location.latitude, user.location.longitude], {
-          icon: L.divIcon({
-            html: iconHtml,
-            className: '',
-            iconSize: [58, 58],
-            iconAnchor: [29, 29]
-          })
-        }).addTo(map);
-
-        marker.on('click', () => {
-          const message = JSON.stringify({ type: 'selectUser', userId: user.id });
-          if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
-            window.ReactNativeWebView.postMessage(message);
-          } else if (window.parent) {
-            window.parent.postMessage(message, '*');
+      function drawTrails(nextTrails) {
+        clearLayers(trailLayers);
+        Object.keys(nextTrails || {}).forEach((id) => {
+          const points = (nextTrails[id] || []).filter(hasLocation).map(getLatLng);
+          if (points.length < 2) {
+            return;
           }
-        });
-      });
 
-      if (clusterLocation) {
-        L.marker([clusterLocation.latitude, clusterLocation.longitude], {
+          const trail = L.polyline(points, {
+            color: 'rgba(34, 211, 238, 0.72)',
+            weight: 3,
+            opacity: 0.9
+          }).addTo(map);
+          trailLayers.push(trail);
+        });
+      }
+
+      function drawCluster(nextClusterLocation) {
+        if (clusterMarker) {
+          map.removeLayer(clusterMarker);
+          clusterMarker = null;
+        }
+
+        if (!hasLocation(nextClusterLocation)) {
+          return;
+        }
+
+        clusterMarker = L.marker(getLatLng(nextClusterLocation), {
           icon: L.divIcon({
-            html: '<div class="cluster-marker">' + clusterLocation.count + '</div>',
+            html: '<div class="cluster-marker">' + escapeValue(nextClusterLocation.count) + '</div>',
             className: '',
             iconSize: [50, 50],
             iconAnchor: [25, 25]
           })
         }).addTo(map);
       }
+
+      window.handleUpdate = function(data) {
+        const nextData = data || {};
+        const nextLocation = hasLocation(nextData.currentLocation)
+          ? nextData.currentLocation
+          : initialData.currentLocation;
+
+        drawCurrent(nextLocation);
+        drawUsers(nextData.users || []);
+        drawRoute(nextData.routeTarget, nextLocation);
+
+        if ('trails' in nextData) {
+          drawTrails(nextData.trails || {});
+        }
+
+        if ('clusterLocation' in nextData) {
+          drawCluster(nextData.clusterLocation);
+        }
+      };
+
+      window.addEventListener('message', function(event) {
+        let data = event.data;
+        if (typeof data === 'string') {
+          try {
+            data = JSON.parse(data);
+          } catch (error) {
+            return;
+          }
+        }
+
+        if (data && data.type === 'updateData') {
+          window.handleUpdate(data);
+        }
+      });
+
+      drawCurrent(initialData.currentLocation);
+      drawTrails(initialData.trails || {});
+      drawUsers(initialData.users || []);
+      drawRoute(initialData.routeTarget, initialData.currentLocation);
+      drawCluster(initialData.clusterLocation);
     </script>
   </body>
 </html>`;
@@ -252,10 +369,48 @@ export default function LeafletMap({
   routeTarget,
   onSelectUser,
 }) {
-  const html = useMemo(
-    () => buildLeafletHtml({ users, currentLocation, trails, clusterLocation, routeTarget }),
-    [users, currentLocation, trails, clusterLocation, routeTarget]
+  const webViewRef = useRef(null);
+  const iframeRef = useRef(null);
+  const initialHtmlRef = useRef(null);
+
+  if (!initialHtmlRef.current) {
+    initialHtmlRef.current = buildLeafletHtml({
+      users,
+      currentLocation,
+      trails,
+      clusterLocation,
+      routeTarget,
+    });
+  }
+
+  const html = initialHtmlRef.current;
+  const webViewSource = useMemo(() => ({ html }), [html]);
+  const updateData = useMemo(
+    () => ({
+      type: 'updateData',
+      users: users || [],
+      currentLocation,
+      routeTarget,
+      trails: trails || {},
+      clusterLocation,
+    }),
+    [clusterLocation, currentLocation, routeTarget, trails, users]
   );
+
+  function sendUpdateToWebFrame() {
+    iframeRef.current?.contentWindow?.postMessage(updateData, '*');
+  }
+
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      sendUpdateToWebFrame();
+      return;
+    }
+
+    webViewRef.current?.injectJavaScript(
+      `window.handleUpdate && window.handleUpdate(${serializeForScript(updateData)}); true;`
+    );
+  }, [updateData]);
 
   useEffect(() => {
     if (Platform.OS !== 'web') {
@@ -264,7 +419,7 @@ export default function LeafletMap({
 
     function handleWebMessage(event) {
       try {
-        const message = JSON.parse(event.data);
+        const message = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
         if (message.type === 'selectUser') {
           const user = users.find((item) => item.id === message.userId);
           onSelectUser(user);
@@ -280,8 +435,10 @@ export default function LeafletMap({
 
   if (Platform.OS === 'web') {
     return React.createElement('iframe', {
+      ref: iframeRef,
       title: 'Orbit Leaflet Map',
       srcDoc: html,
+      onLoad: sendUpdateToWebFrame,
       style: {
         width: '100%',
         height: '100%',
@@ -308,8 +465,9 @@ export default function LeafletMap({
 
   return (
     <WebView
+      ref={webViewRef}
       originWhitelist={['*']}
-      source={{ html }}
+      source={webViewSource}
       style={styles.webview}
       onMessage={handleMessage}
       javaScriptEnabled

@@ -1,6 +1,10 @@
 export function formatDistance(meters) {
+  if (meters === null || meters === undefined || Number.isNaN(Number(meters))) {
+    return '--';
+  }
+
   if (meters < 1000) {
-    return `${meters}m`;
+    return `${Math.round(meters)}m`;
   }
 
   return `${(meters / 1000).toFixed(1)}km`;

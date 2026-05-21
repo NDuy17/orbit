@@ -1,14 +1,13 @@
-﻿import { create } from 'zustand';
+import { create } from 'zustand';
 import mockUsers, { currentUser } from '../data/mockUsers';
 import { getCurrentSession, loginWithEmail, logout, registerWithEmail } from '../services/authService';
 import {
   acceptFriendRequest,
-  fetchFriends,
-  fetchPendingRequests,
+  fetchFriendshipSnapshot,
   rejectFriendRequest,
   sendFriendRequest,
 } from '../services/friendService';
-import { fetchCurrentUserProfile, mapProfileRow, updateOnlineStatus } from '../services/profileService';
+import { createProfile, fetchCurrentUserProfile, mapProfileRow, updateOnlineStatus } from '../services/profileService';
 import { hasSupabaseConfig } from '../services/supabase';
 import { getVietnameseErrorMessage } from '../utils/errorMessages';
 
@@ -19,24 +18,103 @@ function mapFriendProfile(row) {
     ...mapProfileRow(row),
     distance: 0,
     isFriend: true,
-    location: currentUser.location,
+    friendshipStatus: 'friends',
+    location: row.location
+      ? row.location
+      : row.latitude && row.longitude
+        ? { latitude: row.latitude, longitude: row.longitude }
+        : null,
   };
 }
 
-const useUserStore = create((set) => ({
+function getFriendshipStatus(userId, state) {
+  if (!userId) {
+    return 'none';
+  }
+
+  if (state.friends.some((friend) => friend.id === userId)) {
+    return 'friends';
+  }
+
+  if (state.pendingRequests.some((request) => request.sender_id === userId)) {
+    return 'pending_received';
+  }
+
+  if (state.sentRequests.some((request) => request.receiver_id === userId)) {
+    return 'pending_sent';
+  }
+
+  return 'none';
+}
+
+function withFriendshipStatus(user, state) {
+  if (!user) {
+    return user;
+  }
+
+  const friendshipStatus = getFriendshipStatus(user.id, state);
+
+  return {
+    ...user,
+    friendshipStatus,
+    isFriend: friendshipStatus === 'friends',
+  };
+}
+
+function applyFriendshipToState(state) {
+  return {
+    users: state.users.map((user) => withFriendshipStatus(user, state)),
+    friends: state.friends.map((friend) => withFriendshipStatus(friend, state)),
+    selectedUser: withFriendshipStatus(state.selectedUser, state),
+  };
+}
+
+function mergeUniqueById(items) {
+  const map = new Map();
+  items.forEach((item) => {
+    if (item?.id) {
+      map.set(item.id, item);
+    }
+  });
+  return Array.from(map.values());
+}
+
+function isMissingProfileError(error) {
+  const message = String(error?.message || '').toLowerCase();
+  return message.includes('0 rows') || message.includes('no rows') || message.includes('pgrst116');
+}
+
+const useUserStore = create((set, get) => ({
   currentUser,
-  users: hasSupabaseConfig ? [] : mockUsers,
-  friends: hasSupabaseConfig ? [] : mockFriends,
+  users: hasSupabaseConfig ? [] : mockUsers.map((user) => ({ ...user, friendshipStatus: user.isFriend ? 'friends' : 'none' })),
+  friends: hasSupabaseConfig ? [] : mockFriends.map((friend) => ({ ...friend, friendshipStatus: 'friends' })),
   pendingRequests: [],
+  sentRequests: [],
   selectedUser: null,
   session: null,
   authLoading: false,
   backendLoading: false,
+  friendActionLoading: {},
+  actionNotice: null,
   error: null,
   isBackendReady: hasSupabaseConfig,
-  setSelectedUser: (user) => set({ selectedUser: user }),
+
+  setSelectedUser: (user) =>
+    set((state) => ({ selectedUser: withFriendshipStatus(user, state) })),
+
   clearSelectedUser: () => set({ selectedUser: null }),
-  setUsers: (users) => set({ users }),
+
+  setUsers: (users) =>
+    set((state) => {
+      const nextState = { ...state, users };
+      return { users: users.map((user) => withFriendshipStatus(user, nextState)) };
+    }),
+
+  setActionNotice: (actionNotice) => set({ actionNotice }),
+  clearActionNotice: () => set({ actionNotice: null }),
+  setError: (error) => set({ error }),
+  clearError: () => set({ error: null }),
+
   updateProfilePresence: (profileRow) =>
     set((state) => {
       const mappedProfile = mapProfileRow(profileRow);
@@ -45,7 +123,7 @@ const useUserStore = create((set) => ({
       }
 
       const applyProfile = (item) =>
-        item.id === mappedProfile.id
+        item?.id === mappedProfile.id
           ? {
               ...item,
               name: mappedProfile.name,
@@ -64,13 +142,10 @@ const useUserStore = create((set) => ({
         users: state.users.map(applyProfile),
         friends: state.friends.map(applyProfile),
         selectedUser:
-          state.selectedUser?.id === mappedProfile.id
-            ? applyProfile(state.selectedUser)
-            : state.selectedUser,
+          state.selectedUser?.id === mappedProfile.id ? applyProfile(state.selectedUser) : state.selectedUser,
       };
     }),
-  setError: (error) => set({ error }),
-  clearError: () => set({ error: null }),
+
   loadSession: async () => {
     if (!hasSupabaseConfig) {
       return null;
@@ -80,7 +155,7 @@ const useUserStore = create((set) => ({
     try {
       const session = await getCurrentSession();
       if (session) {
-        await updateOnlineStatus(true);
+        await updateOnlineStatus(true).catch(() => {});
       }
       set({ session, authLoading: false });
       return session;
@@ -89,6 +164,7 @@ const useUserStore = create((set) => ({
       return null;
     }
   },
+
   login: async (email, password) => {
     if (!hasSupabaseConfig) {
       set({ session: { user: { id: 'me' } }, error: null });
@@ -98,19 +174,32 @@ const useUserStore = create((set) => ({
     set({ authLoading: true, error: null });
     try {
       const data = await loginWithEmail(email, password);
-      await updateOnlineStatus(true);
-      const profile = await fetchCurrentUserProfile();
+      await updateOnlineStatus(true).catch(() => {});
+      let profile;
+      try {
+        profile = await fetchCurrentUserProfile();
+      } catch (profileError) {
+        if (!isMissingProfileError(profileError)) {
+          throw profileError;
+        }
+
+        profile = await createProfile(data.session.user.id, {
+          name: data.user?.user_metadata?.name || data.session.user.email || 'Người dùng Orbit',
+        });
+      }
       set({
         session: data.session,
         currentUser: profile || { ...currentUser, id: data.session?.user?.id || currentUser.id },
         authLoading: false,
       });
+      await get().refreshFriendData();
       return true;
     } catch (error) {
       set({ error: getVietnameseErrorMessage(error.message), authLoading: false });
       return false;
     }
   },
+
   register: async (email, password, profile) => {
     if (!hasSupabaseConfig) {
       set({
@@ -125,7 +214,7 @@ const useUserStore = create((set) => ({
     try {
       const data = await registerWithEmail(email, password, profile);
       if (data.session) {
-        await updateOnlineStatus(true);
+        await updateOnlineStatus(true).catch(() => {});
       }
       set({
         session: data.session,
@@ -134,29 +223,41 @@ const useUserStore = create((set) => ({
           id: data.user?.id || currentUser.id,
           name: profile.name || currentUser.name,
         },
-        error: data.session ? null : 'TÃ i khoáº£n Ä‘Ã£ táº¡o. HÃ£y kiá»ƒm tra email Ä‘á»ƒ xÃ¡c nháº­n rá»“i Ä‘Äƒng nháº­p.',
+        error: data.session ? null : 'Tài khoản đã tạo. Hãy kiểm tra email để xác nhận rồi đăng nhập.',
         authLoading: false,
       });
-      return true;
+      if (data.session) {
+        await get().refreshFriendData();
+      }
+      return Boolean(data.session);
     } catch (error) {
       set({ error: getVietnameseErrorMessage(error.message), authLoading: false });
       return false;
     }
   },
+
   logoutUser: async () => {
     if (!hasSupabaseConfig) {
-      set({ session: null, currentUser, users: mockUsers, friends: mockFriends, pendingRequests: [] });
+      set({
+        session: null,
+        currentUser,
+        users: mockUsers.map((user) => ({ ...user, friendshipStatus: user.isFriend ? 'friends' : 'none' })),
+        friends: mockFriends.map((friend) => ({ ...friend, friendshipStatus: 'friends' })),
+        pendingRequests: [],
+        sentRequests: [],
+      });
       return;
     }
 
     try {
       await updateOnlineStatus(false).catch(() => {});
       await logout();
-      set({ session: null, currentUser, users: [], friends: [], pendingRequests: [] });
+      set({ session: null, currentUser, users: [], friends: [], pendingRequests: [], sentRequests: [] });
     } catch (error) {
       set({ error: getVietnameseErrorMessage(error.message) });
     }
   },
+
   loadCurrentProfile: async () => {
     if (!hasSupabaseConfig) {
       return currentUser;
@@ -172,10 +273,24 @@ const useUserStore = create((set) => ({
       }
       return profile;
     } catch (error) {
+      if (isMissingProfileError(error) && get().session?.user?.id) {
+        try {
+          const profile = await createProfile(get().session.user.id, {
+            name: get().session.user.email || 'Người dùng Orbit',
+          });
+          set({ currentUser: profile, backendLoading: false });
+          return profile;
+        } catch (createError) {
+          set({ error: getVietnameseErrorMessage(createError.message), backendLoading: false });
+          return null;
+        }
+      }
+
       set({ error: getVietnameseErrorMessage(error.message), backendLoading: false });
       return null;
     }
   },
+
   setOnlineStatus: async (isOnline) => {
     if (!hasSupabaseConfig) {
       return;
@@ -187,78 +302,199 @@ const useUserStore = create((set) => ({
         set({ currentUser: profile, error: null });
       }
     } catch (error) {
-      set({ error: getVietnameseErrorMessage(error.message) });
+      // Presence updates are best-effort. Do not flash an app-wide error if the
+      // browser loses connection while opening/closing the app.
     }
   },
-  loadFriends: async () => {
+
+  refreshFriendData: async () => {
     if (!hasSupabaseConfig) {
-      set({ friends: mockFriends });
+      set((state) => ({ ...applyFriendshipToState(state) }));
       return;
     }
 
-    set({ backendLoading: true, error: null });
     try {
-      const rows = await fetchFriends();
-      set({ friends: rows.map(mapFriendProfile), backendLoading: false });
-    } catch (error) {
-      set({ friends: [], error: getVietnameseErrorMessage(error.message), backendLoading: false });
-    }
-  },
-  loadPendingRequests: async () => {
-    if (!hasSupabaseConfig) {
-      set({ pendingRequests: [] });
-      return;
-    }
+      const snapshot = await fetchFriendshipSnapshot();
+      set((state) => {
+        const nextState = {
+          ...state,
+          friends: snapshot.friends.map(mapFriendProfile),
+          pendingRequests: snapshot.pendingRequests,
+          sentRequests: snapshot.sentRequests,
+          error: null,
+          backendLoading: false,
+        };
 
-    set({ backendLoading: true, error: null });
-    try {
-      const pendingRequests = await fetchPendingRequests();
-      set({ pendingRequests, backendLoading: false });
+        return {
+          friends: nextState.friends.map((friend) => withFriendshipStatus(friend, nextState)),
+          pendingRequests: nextState.pendingRequests,
+          sentRequests: nextState.sentRequests,
+          users: nextState.users.map((user) => withFriendshipStatus(user, nextState)),
+          selectedUser: withFriendshipStatus(nextState.selectedUser, nextState),
+          error: null,
+          backendLoading: false,
+        };
+      });
     } catch (error) {
-      set({ pendingRequests: [], error: getVietnameseErrorMessage(error.message), backendLoading: false });
+      set({ error: getVietnameseErrorMessage(error.message), backendLoading: false });
     }
   },
+
+  loadFriends: async () => get().refreshFriendData(),
+  loadPendingRequests: async () => get().refreshFriendData(),
+
   requestFriend: async (receiverId) => {
     if (!hasSupabaseConfig) {
       return true;
     }
 
+    const current = get();
+    if (getFriendshipStatus(receiverId, current) !== 'none') {
+      return true;
+    }
+
+    const tempRequest = {
+      id: `local-${Date.now()}-${receiverId}`,
+      sender_id: current.currentUser.id,
+      receiver_id: receiverId,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    };
+
+    set((state) => {
+      const nextState = {
+        ...state,
+        sentRequests: [...state.sentRequests, tempRequest],
+        friendActionLoading: { ...state.friendActionLoading, [receiverId]: true },
+        actionNotice: 'Đã gửi lời mời kết bạn.',
+        error: null,
+      };
+
+      return {
+        sentRequests: nextState.sentRequests,
+        friendActionLoading: nextState.friendActionLoading,
+        actionNotice: nextState.actionNotice,
+        users: nextState.users.map((user) => withFriendshipStatus(user, nextState)),
+        selectedUser: withFriendshipStatus(nextState.selectedUser, nextState),
+        error: null,
+      };
+    });
+
     try {
       await sendFriendRequest(receiverId);
-      set({ error: null });
+      await get().refreshFriendData();
       return true;
     } catch (error) {
-      set({ error: getVietnameseErrorMessage(error.message) });
+      set((state) => {
+        const nextState = {
+          ...state,
+          sentRequests: state.sentRequests.filter((request) => request.id !== tempRequest.id),
+          friendActionLoading: { ...state.friendActionLoading, [receiverId]: false },
+          error: getVietnameseErrorMessage(error.message),
+        };
+
+        return {
+          sentRequests: nextState.sentRequests,
+          friendActionLoading: nextState.friendActionLoading,
+          users: nextState.users.map((user) => withFriendshipStatus(user, nextState)),
+          selectedUser: withFriendshipStatus(nextState.selectedUser, nextState),
+          error: nextState.error,
+        };
+      });
       return false;
+    } finally {
+      set((state) => ({
+        friendActionLoading: { ...state.friendActionLoading, [receiverId]: false },
+      }));
     }
   },
+
   acceptRequest: async (requestId) => {
     if (!hasSupabaseConfig) {
       return;
     }
 
-    set({ backendLoading: true, error: null });
+    const request = get().pendingRequests.find((item) => String(item.id) === String(requestId));
+    const senderProfile = request?.sender ? mapFriendProfile(request.sender) : null;
+    const actionUserId = request?.sender_id || requestId;
+
+    set((state) => {
+      const nextFriends = senderProfile ? mergeUniqueById([...state.friends, senderProfile]) : state.friends;
+      const nextState = {
+        ...state,
+        friends: nextFriends,
+        pendingRequests: state.pendingRequests.filter((item) => String(item.id) !== String(requestId)),
+        sentRequests: state.sentRequests.filter((item) => item.receiver_id !== actionUserId),
+        friendActionLoading: { ...state.friendActionLoading, [actionUserId]: true },
+        actionNotice: 'Hai bạn đã trở thành bạn bè.',
+        error: null,
+      };
+
+      return {
+        friends: nextState.friends.map((friend) => withFriendshipStatus(friend, nextState)),
+        pendingRequests: nextState.pendingRequests,
+        sentRequests: nextState.sentRequests,
+        friendActionLoading: nextState.friendActionLoading,
+        actionNotice: nextState.actionNotice,
+        users: nextState.users.map((user) => withFriendshipStatus(user, nextState)),
+        selectedUser: withFriendshipStatus(nextState.selectedUser, nextState),
+        error: null,
+      };
+    });
+
     try {
       await acceptFriendRequest(requestId);
-      const rows = await fetchFriends();
-      const pendingRequests = await fetchPendingRequests();
-      set({ friends: rows.map(mapFriendProfile), pendingRequests, backendLoading: false });
+      await get().refreshFriendData();
     } catch (error) {
-      set({ error: getVietnameseErrorMessage(error.message), backendLoading: false });
+      set({ error: getVietnameseErrorMessage(error.message) });
+      await get().refreshFriendData();
+    } finally {
+      set((state) => ({
+        friendActionLoading: { ...state.friendActionLoading, [actionUserId]: false },
+      }));
     }
   },
+
+  acceptRequestForUser: async (userId) => {
+    const request = get().pendingRequests.find((item) => item.sender_id === userId);
+    if (request) {
+      await get().acceptRequest(request.id);
+    }
+  },
+
   rejectRequest: async (requestId) => {
     if (!hasSupabaseConfig) {
       return;
     }
 
-    set({ backendLoading: true, error: null });
+    const request = get().pendingRequests.find((item) => String(item.id) === String(requestId));
+    const actionUserId = request?.sender_id || requestId;
+
+    set((state) => {
+      const nextState = {
+        ...state,
+        pendingRequests: state.pendingRequests.filter((item) => String(item.id) !== String(requestId)),
+        friendActionLoading: { ...state.friendActionLoading, [actionUserId]: true },
+      };
+
+      return {
+        pendingRequests: nextState.pendingRequests,
+        friendActionLoading: nextState.friendActionLoading,
+        users: nextState.users.map((user) => withFriendshipStatus(user, nextState)),
+        selectedUser: withFriendshipStatus(nextState.selectedUser, nextState),
+      };
+    });
+
     try {
       await rejectFriendRequest(requestId);
-      const pendingRequests = await fetchPendingRequests();
-      set({ pendingRequests, backendLoading: false });
+      await get().refreshFriendData();
     } catch (error) {
-      set({ error: getVietnameseErrorMessage(error.message), backendLoading: false });
+      set({ error: getVietnameseErrorMessage(error.message) });
+      await get().refreshFriendData();
+    } finally {
+      set((state) => ({
+        friendActionLoading: { ...state.friendActionLoading, [actionUserId]: false },
+      }));
     }
   },
 }));

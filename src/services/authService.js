@@ -20,7 +20,13 @@ export async function registerWithEmail(email, password, profile) {
   }
 
   if (data.user) {
-    await createProfile(data.user.id, profile);
+    try {
+      await createProfile(data.user.id, profile);
+    } catch (profileError) {
+      if (data.session) {
+        throw profileError;
+      }
+    }
   }
 
   return data;

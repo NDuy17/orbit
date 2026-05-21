@@ -46,6 +46,7 @@ export default function LoginScreen({ navigation }) {
   return (
     <SafeAreaView style={styles.container}>
       <Text style={styles.title}>Đăng nhập</Text>
+      <Text style={styles.subtitle}>Vào Orbit để xem ai đang ở gần bạn.</Text>
       <GlassCard style={styles.form}>
         <TextInput
           style={styles.input}
@@ -62,7 +63,7 @@ export default function LoginScreen({ navigation }) {
         <View style={styles.passwordRow}>
           <TextInput
             style={styles.passwordInput}
-            placeholder="Mật khẩu của bạn"
+            placeholder="Mật khẩu"
             placeholderTextColor={colors.muted}
             secureTextEntry={!showPassword}
             value={password}
@@ -101,7 +102,11 @@ const styles = StyleSheet.create({
   title: {
     ...typography.heading,
     color: colors.text,
-    marginBottom: spacing.sm,
+  },
+  subtitle: {
+    color: colors.muted,
+    marginTop: spacing.sm,
+    marginBottom: spacing.lg,
   },
   form: {
     gap: spacing.md,

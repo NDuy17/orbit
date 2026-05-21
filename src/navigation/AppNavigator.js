@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
-import { AppState, Platform, Text, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { AppState, Platform, StyleSheet, Text, View } from 'react-native';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { Ionicons } from '@expo/vector-icons';
 import ChatScreen from '../screens/ChatScreen';
 import FriendsScreen from '../screens/FriendsScreen';
 import HomeMapScreen from '../screens/HomeMapScreen';
@@ -12,6 +13,7 @@ import OnboardingScreen from '../screens/OnboardingScreen';
 import PrivacyScreen from '../screens/PrivacyScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import RegisterScreen from '../screens/RegisterScreen';
+import { subscribeToFriendRequests, subscribeToFriends } from '../services/friendService';
 import { subscribeToProfiles } from '../services/profileService';
 import useUserStore from '../store/userStore';
 import colors from '../theme/colors';
@@ -31,8 +33,17 @@ const navigationTheme = {
   },
 };
 
-function TabIcon({ icon, focused }) {
-  return <Text style={{ fontSize: 20, opacity: focused ? 1 : 0.5 }}>{icon}</Text>;
+function OrbitLoading() {
+  return (
+    <View style={styles.loadingContainer}>
+      <View style={styles.loadingOrbit}>
+        <View style={styles.loadingRing} />
+        <View style={styles.loadingPlanet} />
+      </View>
+      <Text style={styles.loadingTitle}>Orbit</Text>
+      <Text style={styles.loadingText}>Đang đồng bộ quỹ đạo của bạn...</Text>
+    </View>
+  );
 }
 
 function MainTabs() {
@@ -40,61 +51,96 @@ function MainTabs() {
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
-        tabBarStyle: {
-          backgroundColor: colors.cardStrong,
-          borderTopColor: colors.line,
-          height: 68,
-          paddingTop: 8,
-          paddingBottom: 10,
-        },
+        tabBarStyle: styles.tabBar,
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.muted,
-        tabBarLabelStyle: {
-          fontSize: 12,
-          fontWeight: '700',
-        },
+        tabBarLabelStyle: styles.tabLabel,
+        tabBarIconStyle: styles.tabIcon,
       }}
     >
       <Tab.Screen
         name="HomeMap"
         component={HomeMapScreen}
-        options={{ title: 'Bản đồ', tabBarIcon: ({ focused }) => <TabIcon icon="◎" focused={focused} /> }}
+        options={{
+          title: 'Bản đồ',
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'map' : 'map-outline'} size={22} color={color} />
+          ),
+        }}
       />
       <Tab.Screen
         name="Nearby"
         component={NearbyScreen}
-        options={{ title: 'Gần đây', tabBarIcon: ({ focused }) => <TabIcon icon="⌖" focused={focused} /> }}
+        options={{
+          title: 'Gần đây',
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'navigate-circle' : 'navigate-circle-outline'} size={23} color={color} />
+          ),
+        }}
       />
       <Tab.Screen
         name="Friends"
         component={FriendsScreen}
-        options={{ title: 'Bạn bè', tabBarIcon: ({ focused }) => <TabIcon icon="◌" focused={focused} /> }}
+        options={{
+          title: 'Bạn bè',
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'people' : 'people-outline'} size={23} color={color} />
+          ),
+        }}
       />
       <Tab.Screen
         name="Profile"
         component={ProfileScreen}
-        options={{ title: 'Hồ sơ', tabBarIcon: ({ focused }) => <TabIcon icon="●" focused={focused} /> }}
+        options={{
+          title: 'Hồ sơ',
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'person-circle' : 'person-circle-outline'} size={24} color={color} />
+          ),
+        }}
       />
     </Tab.Navigator>
   );
 }
 
 export default function AppNavigator() {
-  const { loadSession, loadCurrentProfile, setOnlineStatus, updateProfilePresence, session } = useUserStore();
+  const {
+    loadSession,
+    loadCurrentProfile,
+    refreshFriendData,
+    setOnlineStatus,
+    updateProfilePresence,
+    session,
+  } = useUserStore();
   const [ready, setReady] = useState(false);
   const [initialRouteName, setInitialRouteName] = useState('Onboarding');
+  const presenceRef = useRef(null);
+  const navigationRef = useRef(null);
+  const didResetNavigationRef = useRef(false);
+
+  function resetToInitialRoute(routeName) {
+    if (!navigationRef.current || didResetNavigationRef.current || !routeName) {
+      return;
+    }
+
+    didResetNavigationRef.current = true;
+    navigationRef.current.reset({
+      index: 0,
+      routes: [{ name: routeName }],
+    });
+  }
 
   useEffect(() => {
     let active = true;
 
     async function bootstrap() {
-      const session = await loadSession();
-      if (session) {
+      const currentSession = await loadSession();
+      if (currentSession) {
         await loadCurrentProfile();
+        await refreshFriendData();
       }
 
       if (active) {
-        setInitialRouteName(session ? 'MainTabs' : 'Onboarding');
+        setInitialRouteName(currentSession ? 'MainTabs' : 'Onboarding');
         setReady(true);
       }
     }
@@ -104,21 +150,31 @@ export default function AppNavigator() {
     return () => {
       active = false;
     };
-  }, [loadCurrentProfile, loadSession]);
+  }, [loadCurrentProfile, loadSession, refreshFriendData]);
 
   useEffect(() => {
     if (!session) {
+      presenceRef.current = null;
       return undefined;
     }
 
-    setOnlineStatus(true);
+    function syncPresence(isOnline) {
+      if (presenceRef.current === isOnline) {
+        return;
+      }
+
+      presenceRef.current = isOnline;
+      setOnlineStatus(isOnline);
+    }
+
+    syncPresence(true);
 
     const subscription = AppState.addEventListener('change', (nextState) => {
-      setOnlineStatus(nextState === 'active');
+      syncPresence(nextState === 'active');
     });
 
     function handleBeforeUnload() {
-      setOnlineStatus(false);
+      syncPresence(false);
     }
 
     if (Platform.OS === 'web') {
@@ -145,14 +201,40 @@ export default function AppNavigator() {
     });
   }, [session, updateProfilePresence]);
 
+  useEffect(() => {
+    if (!session) {
+      return undefined;
+    }
+
+    const reloadFriends = () => {
+      refreshFriendData();
+    };
+    const unsubscribeRequests = subscribeToFriendRequests(reloadFriends);
+    const unsubscribeFriends = subscribeToFriends(reloadFriends);
+
+    return () => {
+      unsubscribeRequests();
+      unsubscribeFriends();
+    };
+  }, [refreshFriendData, session]);
+
+  useEffect(() => {
+    if (ready) {
+      resetToInitialRoute(initialRouteName);
+    }
+  }, [initialRouteName, ready]);
+
   if (!ready) {
-    return <View style={{ flex: 1, backgroundColor: colors.background }} />;
+    return <OrbitLoading />;
   }
 
   return (
-    <NavigationContainer theme={navigationTheme}>
+    <NavigationContainer
+      ref={navigationRef}
+      theme={navigationTheme}
+      onReady={() => resetToInitialRoute(initialRouteName)}
+    >
       <Stack.Navigator
-        key={initialRouteName}
         initialRouteName={initialRouteName}
         screenOptions={{
           headerStyle: { backgroundColor: colors.background },
@@ -172,3 +254,58 @@ export default function AppNavigator() {
     </NavigationContainer>
   );
 }
+
+const styles = StyleSheet.create({
+  tabBar: {
+    backgroundColor: colors.cardStrong,
+    borderTopColor: colors.line,
+    height: 60,
+    paddingTop: 5,
+    paddingBottom: 6,
+  },
+  tabLabel: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  tabIcon: {
+    marginTop: 2,
+  },
+  loadingContainer: {
+    flex: 1,
+    backgroundColor: colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 28,
+  },
+  loadingOrbit: {
+    width: 130,
+    height: 130,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 24,
+  },
+  loadingRing: {
+    position: 'absolute',
+    width: 128,
+    height: 128,
+    borderRadius: 64,
+    borderWidth: 2,
+    borderColor: 'rgba(34, 211, 238, 0.45)',
+  },
+  loadingPlanet: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.accent,
+  },
+  loadingTitle: {
+    color: colors.text,
+    fontSize: 34,
+    fontWeight: '900',
+  },
+  loadingText: {
+    color: colors.muted,
+    marginTop: 8,
+    textAlign: 'center',
+  },
+});

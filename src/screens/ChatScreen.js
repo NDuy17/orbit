@@ -18,32 +18,68 @@ const LIKE_MESSAGE = '👍';
 const SEND_ICON = '➤';
 
 function mapMessage(row) {
+  const createdAt = row.created_at || row.createdAt || new Date().toISOString();
+
   return {
-    id: row.id ? String(row.id) : `${row.sender_id}-${row.receiver_id}-${row.created_at}-${row.text}`,
-    senderId: row.sender_id,
-    receiverId: row.receiver_id,
+    id: row.id ? String(row.id) : `${row.sender_id}-${row.receiver_id}-${createdAt}-${row.text}`,
+    senderId: row.sender_id || row.senderId,
+    receiverId: row.receiver_id || row.receiverId,
     text: row.text,
-    time: row.created_at
-      ? new Date(row.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    createdAt,
+    time: createdAt
+      ? new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       : 'Bây giờ',
   };
 }
 
+function getMessageKey(message) {
+  if (message?.id) {
+    return String(message.id);
+  }
+
+  return `${message?.senderId}-${message?.receiverId}-${message?.createdAt || message?.time}-${message?.text}`;
+}
+
+function getMessageFingerprint(message) {
+  return `${message?.senderId}-${message?.receiverId}-${message?.createdAt || ''}-${message?.text}`;
+}
+
 function addMessageOnce(items, message) {
-  if (items.some((item) => item.id === message.id)) {
+  const nextMessage = { ...message, id: getMessageKey(message) };
+  const nextKey = getMessageKey(nextMessage);
+  const nextFingerprint = getMessageFingerprint(nextMessage);
+
+  if (
+    items.some(
+      (item) =>
+        getMessageKey(item) === nextKey ||
+        (nextFingerprint && getMessageFingerprint(item) === nextFingerprint)
+    )
+  ) {
     return items;
   }
 
-  return [...items, message];
+  return [...items, nextMessage];
+}
+
+function replaceMessage(items, tempId, message) {
+  const withoutTemp = items.filter((item) => String(item.id) !== String(tempId));
+  return addMessageOnce(withoutTemp, message);
 }
 
 function mergeMessages(oldMessages, newMessages) {
   const messageMap = new Map();
   [...oldMessages, ...newMessages].forEach((message) => {
-    messageMap.set(message.id, message);
+    if (message) {
+      messageMap.set(getMessageKey(message), { ...message, id: getMessageKey(message) });
+    }
   });
 
   return Array.from(messageMap.values());
+}
+
+function normalizeCachedMessages(items) {
+  return mergeMessages([], items || []);
 }
 
 export default function ChatScreen({ route }) {
@@ -64,16 +100,19 @@ export default function ChatScreen({ route }) {
   }
 
   useEffect(() => {
-    if (!isBackendReady || !user?.id) {
+    if (!isBackendReady || !user?.id || !currentUser?.id) {
       return undefined;
     }
 
     let active = true;
 
     async function loadMessages() {
-      const cachedMessages = await loadCachedMessages(currentUser.id, user.id);
+      const cachedMessages = normalizeCachedMessages(
+        await loadCachedMessages(currentUser.id, user.id)
+      );
       if (active && cachedMessages.length) {
         setMessages(cachedMessages);
+        scrollToLatest(false);
       }
 
       setLoading(!cachedMessages.length);
@@ -82,8 +121,11 @@ export default function ChatScreen({ route }) {
         const rows = await fetchMessagesWithUser(user.id);
         if (active) {
           const remoteMessages = rows.map(mapMessage);
-          setMessages((items) => mergeMessages(items, remoteMessages));
-          saveCachedMessages(currentUser.id, user.id, remoteMessages);
+          setMessages((items) => {
+            const nextMessages = mergeMessages(items, remoteMessages);
+            saveCachedMessages(currentUser.id, user.id, nextMessages);
+            return nextMessages;
+          });
           scrollToLatest(false);
         }
       } catch (err) {
@@ -114,7 +156,7 @@ export default function ChatScreen({ route }) {
       active = false;
       unsubscribe();
     };
-  }, [currentUser.id, isBackendReady, user?.id]);
+  }, [currentUser?.id, isBackendReady, user?.id]);
 
   async function handleSend(messageText) {
     const cleanText = (messageText || text).trim();
@@ -122,38 +164,65 @@ export default function ChatScreen({ route }) {
       return;
     }
 
+    const isTypedMessage = !messageText;
+
     if (!isBackendReady) {
       setMessages((items) =>
         addMessageOnce(items, {
           id: `local-${Date.now()}`,
           senderId: 'me',
+          receiverId: user.id,
           text: cleanText,
+          createdAt: new Date().toISOString(),
           time: 'Bây giờ',
         })
       );
       scrollToLatest();
-      if (!messageText) {
+      if (isTypedMessage) {
         setText('');
       }
       return;
     }
 
+    if (!currentUser?.id) {
+      setError('Bạn cần đăng nhập lại để gửi tin nhắn.');
+      return;
+    }
+
+    const tempId = `temp-${Date.now()}`;
+    const optimisticMessage = {
+      id: tempId,
+      senderId: currentUser.id,
+      receiverId: user.id,
+      text: cleanText,
+      createdAt: new Date().toISOString(),
+      time: 'Bây giờ',
+      pending: true,
+    };
+
     setSending(true);
     setError(null);
+    setMessages((items) => addMessageOnce(items, optimisticMessage));
+    scrollToLatest();
+    if (isTypedMessage) {
+      setText('');
+    }
+
     try {
       const row = await sendMessage(user.id, cleanText);
       const newMessage = mapMessage(row);
       setMessages((items) => {
-        const nextMessages = addMessageOnce(items, newMessage);
+        const nextMessages = replaceMessage(items, tempId, newMessage);
         saveCachedMessages(currentUser.id, user.id, nextMessages);
         return nextMessages;
       });
       scrollToLatest();
-      if (!messageText) {
-        setText('');
-      }
     } catch (err) {
       setError(getVietnameseErrorMessage(err.message));
+      setMessages((items) => items.filter((item) => String(item.id) !== tempId));
+      if (isTypedMessage) {
+        setText(cleanText);
+      }
     } finally {
       setSending(false);
     }
@@ -199,9 +268,9 @@ export default function ChatScreen({ route }) {
       <FlatList
         ref={listRef}
         data={messages}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item, index) => String(item.id || `message-${index}`)}
         renderItem={({ item }) => {
-          const isMine = item.senderId === 'me' || item.senderId === currentUser.id;
+          const isMine = item.senderId === 'me' || item.senderId === currentUser?.id;
           return (
             <View style={[styles.message, isMine ? styles.myMessage : styles.theirMessage]}>
               <Text style={styles.messageText}>{item.text}</Text>
@@ -214,8 +283,8 @@ export default function ChatScreen({ route }) {
         showsVerticalScrollIndicator={false}
       />
       <View style={styles.reactions}>
-        {reactions.map((item) => (
-          <Pressable key={item} onPress={() => setText((value) => `${value}${item}`)}>
+        {reactions.map((item, index) => (
+          <Pressable key={`reaction-${index}`} onPress={() => setText((value) => `${value}${item}`)}>
             <Text style={styles.reaction}>{item}</Text>
           </Pressable>
         ))}
