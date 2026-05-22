@@ -7,6 +7,7 @@ import {
   sendMessage,
   subscribeToMessages,
 } from '../services/messageService';
+import { fetchProfileById } from '../services/profileService.js';
 import useUserStore from '../store/userStore';
 import colors from '../theme/colors';
 import spacing from '../theme/spacing';
@@ -85,13 +86,34 @@ function normalizeCachedMessages(items) {
 export default function ChatScreen({ route }) {
   const { users, friends, currentUser, isBackendReady } = useUserStore();
   const allPeople = useMemo(() => [...users, ...friends], [users, friends]);
-  const user = allPeople.find((item) => item.id === route.params?.userId) || allPeople[0];
+  const localUser = allPeople.find((item) => item.id === route.params?.userId);
+  const [remoteUser, setRemoteUser] = useState(route.params?.user || null);
+  const user = localUser || remoteUser || (!route.params?.userId ? allPeople[0] : null);
   const [messages, setMessages] = useState(isBackendReady ? [] : mockMessages);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const listRef = useRef(null);
+
+  useEffect(() => {
+    if (!isBackendReady || localUser || remoteUser || !route.params?.userId) {
+      return undefined;
+    }
+
+    let active = true;
+    fetchProfileById(route.params.userId)
+      .then((profile) => {
+        if (active) {
+          setRemoteUser(profile);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      active = false;
+    };
+  }, [isBackendReady, localUser, remoteUser, route.params?.userId]);
 
   function scrollToLatest(animated = true) {
     requestAnimationFrame(() => {

@@ -7,7 +7,11 @@ import colors from '../theme/colors';
 import spacing from '../theme/spacing';
 import typography from '../theme/typography';
 
-const radiusOptions = [100, 500, 1000];
+const radiusOptions = [100, 500, 1000, 5000];
+
+function formatRadiusLabel(value) {
+  return value >= 1000 ? `${value / 1000}km` : `${value}m`;
+}
 
 export default function PrivacyScreen() {
   const {
@@ -53,7 +57,7 @@ export default function PrivacyScreen() {
               style={[styles.radiusChip, radius === item && styles.activeRadius]}
             >
               <Text style={[styles.radiusText, radius === item && styles.activeRadiusText]}>
-                {item === 1000 ? '1km' : `${item}m`}
+                {formatRadiusLabel(item)}
               </Text>
             </Pressable>
           ))}

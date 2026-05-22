@@ -14,9 +14,11 @@ import OnboardingScreen from '../screens/OnboardingScreen';
 import PrivacyScreen from '../screens/PrivacyScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import RegisterScreen from '../screens/RegisterScreen';
+import SettingsScreen from '../screens/SettingsScreen';
 import { subscribeToFriendRequests, subscribeToFriends } from '../services/friendService';
 import { subscribeToProfiles } from '../services/profileService.js';
 import useUserStore from '../store/userStore';
+import useThemeStore from '../store/themeStore';
 import colors from '../theme/colors';
 
 const Stack = createNativeStackNavigator();
@@ -49,7 +51,7 @@ function OrbitLoading() {
 
 const TAB_ICONS = {
   HomeMap: ['map-outline', 'map'],
-  Nearby: ['navigate-circle-outline', 'navigate-circle'],
+  Nearby: ['chatbubble-ellipses-outline', 'chatbubble-ellipses'],
   Friends: ['people-outline', 'people'],
   Profile: ['person-circle-outline', 'person-circle'],
 };
@@ -60,8 +62,11 @@ function TabIcon({ routeName, color, focused }) {
 }
 
 function MainTabs() {
+  const themeName = useThemeStore((state) => state.themeName);
+
   return (
     <Tab.Navigator
+      key={`tabs-${themeName}`}
       screenOptions={{
         headerShown: false,
         tabBarStyle: styles.tabBar,
@@ -83,7 +88,7 @@ function MainTabs() {
         name="Nearby"
         component={NearbyScreen}
         options={{
-          title: 'Gần đây',
+          title: 'Tin nhắn',
           tabBarIcon: (props) => <TabIcon routeName="Nearby" {...props} />,
         }}
       />
@@ -108,6 +113,7 @@ function MainTabs() {
 }
 
 export default function AppNavigator() {
+  const themeName = useThemeStore((state) => state.themeName);
   const {
     loadSession,
     loadCurrentProfile,
@@ -233,10 +239,23 @@ export default function AppNavigator() {
     return <OrbitLoading />;
   }
 
+  const themedNavigation = {
+    ...navigationTheme,
+    colors: {
+      ...navigationTheme.colors,
+      background: colors.background,
+      card: colors.background,
+      text: colors.text,
+      border: colors.line,
+      primary: colors.accent,
+    },
+  };
+
   return (
     <NavigationContainer
+      key={`nav-${themeName}`}
       ref={navigationRef}
-      theme={navigationTheme}
+      theme={themedNavigation}
       onReady={() => resetToInitialRoute(initialRouteName)}
     >
       <Stack.Navigator
@@ -256,6 +275,7 @@ export default function AppNavigator() {
         <Stack.Screen name="UserProfile" component={ProfileScreen} options={{ title: 'Hồ sơ' }} />
         <Stack.Screen name="EditProfile" component={EditProfileScreen} options={{ title: 'Chỉnh sửa hồ sơ' }} />
         <Stack.Screen name="Privacy" component={PrivacyScreen} options={{ title: 'Riêng tư' }} />
+        <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: 'Cài đặt' }} />
       </Stack.Navigator>
     </NavigationContainer>
   );

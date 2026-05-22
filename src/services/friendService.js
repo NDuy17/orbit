@@ -258,6 +258,37 @@ export async function rejectFriendRequest(requestId) {
   return data;
 }
 
+export async function removeFriend(friendId) {
+  const client = requireSupabase();
+  const userId = await getCurrentUserId(client);
+
+  if (!userId || !friendId) {
+    throw new Error('Không thể xóa bạn bè.');
+  }
+
+  const { error: firstError } = await client
+    .from('friends')
+    .delete()
+    .eq('user_id', userId)
+    .eq('friend_id', friendId);
+
+  if (firstError) {
+    throw firstError;
+  }
+
+  const { error: secondError } = await client
+    .from('friends')
+    .delete()
+    .eq('user_id', friendId)
+    .eq('friend_id', userId);
+
+  if (secondError) {
+    throw secondError;
+  }
+
+  return true;
+}
+
 export async function fetchFriends() {
   const snapshot = await fetchFriendshipSnapshot();
   return snapshot.friends;

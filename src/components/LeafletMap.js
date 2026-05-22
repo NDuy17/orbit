@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { Platform, StyleSheet } from 'react-native';
-import colors from '../theme/colors';
+import colors, { getCurrentThemeName, themePalettes } from '../theme/colors';
 
 function serializeForScript(value) {
   return JSON.stringify(value || null).replace(/</g, '\\u003c');
@@ -15,6 +15,7 @@ export function buildLeafletHtml({
   recenterKey,
   locationReady,
 }) {
+  const mapPalette = themePalettes[getCurrentThemeName()] || themePalettes.dark;
   const initialData = serializeForScript({
     users: users || [],
     currentLocation,
@@ -36,10 +37,10 @@ export function buildLeafletHtml({
         width: 100%;
         height: 100%;
         margin: 0;
-        background: ${colors.background};
+        background: ${mapPalette.background};
       }
       .leaflet-container {
-        background: ${colors.background};
+        background: ${mapPalette.background};
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
       .leaflet-control-attribution {

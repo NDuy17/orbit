@@ -80,7 +80,66 @@ export async function fetchProfileById(userId) {
     throw error;
   }
 
-  return mapProfileRow(data);
+  const profile = mapProfileRow(data);
+
+  try {
+    const { data: friendRows, count } = await client
+      .from('friends')
+      .select('friend_id', { count: 'exact' })
+      .eq('user_id', userId);
+
+    if (typeof count === 'number') {
+      profile.friends = count;
+    }
+
+    profile.friendIds = (friendRows || []).map((row) => row.friend_id).filter(Boolean);
+  } catch {
+    // Friend count can be restricted by RLS; the profile row remains usable.
+  }
+
+  return profile;
+}
+
+function shuffleItems(items) {
+  return [...items].sort(() => Math.random() - 0.5);
+}
+
+export async function searchProfilesByName(query, { limit = 8, offset = 0 } = {}) {
+  const client = requireSupabase();
+  const { data: authData, error: authError } = await client.auth.getUser();
+
+  if (authError) {
+    throw authError;
+  }
+
+  const cleanQuery = String(query || '').trim();
+  if (!cleanQuery) {
+    return [];
+  }
+
+  let { data, error } = await client
+    .from('profiles')
+    .select('*')
+    .or(`full_name.ilike.%${cleanQuery}%,username.ilike.%${cleanQuery}%`)
+    .neq('id', authData.user?.id || '')
+    .range(offset, offset + limit - 1);
+
+  if (error && String(error.message || '').toLowerCase().includes('full_name')) {
+    const retry = await client
+      .from('profiles')
+      .select('*')
+      .ilike('username', `%${cleanQuery}%`)
+      .neq('id', authData.user?.id || '')
+      .range(offset, offset + limit - 1);
+    data = retry.data;
+    error = retry.error;
+  }
+
+  if (error) {
+    throw error;
+  }
+
+  return shuffleItems((data || []).map(mapProfileRow).filter(Boolean));
 }
 
 export async function updateProfile(userId, updates) {

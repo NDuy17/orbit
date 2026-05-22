@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import colors from '../theme/colors';
 import spacing from '../theme/spacing';
 import { formatDistance } from '../utils/distance';
@@ -12,7 +12,9 @@ export default function UserListItem({
   onChat,
   onAddFriend,
   onAcceptFriend,
+  onPress,
   showFriendButton = true,
+  showChatButton = true,
   loading = false,
 }) {
   const friendshipStatus = user.friendshipStatus || (user.isFriend ? 'friends' : 'none');
@@ -40,7 +42,11 @@ export default function UserListItem({
   }
 
   return (
-    <View style={styles.item}>
+    <Pressable
+      onPress={onPress}
+      disabled={!onPress}
+      style={({ pressed }) => [styles.item, pressed && styles.pressed]}
+    >
       <UserAvatar uri={user.avatar} size={54} style={styles.avatar} />
       <View style={styles.content}>
         <View style={styles.header}>
@@ -62,11 +68,11 @@ export default function UserListItem({
             style={styles.smallButton}
           />
         ) : null}
-        {friendshipStatus !== 'friends' || !showFriendButton ? (
+        {showChatButton && (friendshipStatus !== 'friends' || !showFriendButton) ? (
           <OrbitButton title="Chat" onPress={onChat} style={styles.smallButton} />
         ) : null}
       </View>
-    </View>
+    </Pressable>
   );
 }
 
@@ -80,6 +86,10 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
     borderWidth: 1,
     marginBottom: spacing.md,
+  },
+  pressed: {
+    opacity: 0.8,
+    transform: [{ scale: 0.99 }],
   },
   avatar: {
     borderWidth: 1,
@@ -109,7 +119,9 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   actions: {
+    flexDirection: 'row',
     gap: spacing.sm,
+    alignItems: 'center',
     justifyContent: 'center',
   },
   smallButton: {

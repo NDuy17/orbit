@@ -5,9 +5,17 @@ import {
   acceptFriendRequest,
   fetchFriendshipSnapshot,
   rejectFriendRequest,
+  removeFriend,
   sendFriendRequest,
 } from '../services/friendService';
-import { createProfile, fetchCurrentUserProfile, mapProfileRow, updateOnlineStatus, updateProfile } from '../services/profileService.js';
+import {
+  createProfile,
+  fetchCurrentUserProfile,
+  mapProfileRow,
+  searchProfilesByName,
+  updateOnlineStatus,
+  updateProfile,
+} from '../services/profileService.js';
 import { hasSupabaseConfig } from '../services/supabase';
 import { getVietnameseErrorMessage } from '../utils/errorMessages';
 import { textOr } from '../utils/text';
@@ -566,6 +574,80 @@ const useUserStore = create((set, get) => ({
       set((state) => ({
         friendActionLoading: { ...state.friendActionLoading, [actionUserId]: false },
       }));
+    }
+  },
+
+  removeFriendForUser: async (friendId) => {
+    if (!friendId) {
+      return false;
+    }
+
+    if (!hasSupabaseConfig) {
+      set((state) => {
+        const nextState = {
+          ...state,
+          friends: state.friends.filter((friend) => friend.id !== friendId),
+          actionNotice: 'Đã xóa bạn bè.',
+        };
+
+        return {
+          friends: nextState.friends.map((friend) => withFriendshipStatus(friend, nextState)),
+          currentUser: { ...state.currentUser, friends: nextState.friends.length },
+          users: nextState.users.map((user) => withFriendshipStatus(user, nextState)),
+          selectedUser: withFriendshipStatus(nextState.selectedUser, nextState),
+          actionNotice: nextState.actionNotice,
+        };
+      });
+      return true;
+    }
+
+    set((state) => ({
+      friendActionLoading: { ...state.friendActionLoading, [friendId]: true },
+      error: null,
+    }));
+
+    try {
+      await removeFriend(friendId);
+      set({ actionNotice: 'Đã xóa bạn bè.' });
+      await get().refreshFriendData();
+      return true;
+    } catch (error) {
+      set({ error: getVietnameseErrorMessage(error.message) });
+      return false;
+    } finally {
+      set((state) => ({
+        friendActionLoading: { ...state.friendActionLoading, [friendId]: false },
+      }));
+    }
+  },
+
+  searchUsersByName: async (query, options = {}) => {
+    const cleanQuery = String(query || '').trim();
+    const limit = options.limit || 8;
+    const offset = options.offset || 0;
+    if (!cleanQuery) {
+      return [];
+    }
+
+    if (!hasSupabaseConfig) {
+      const lowered = cleanQuery.toLowerCase();
+      const state = get();
+      return mockUsers
+        .filter((user) => user.id !== state.currentUser.id && user.name.toLowerCase().includes(lowered))
+        .slice(offset, offset + limit)
+        .map((user) => withFriendshipStatus(user, state));
+    }
+
+    set({ backendLoading: true, error: null });
+    try {
+      const profiles = await searchProfilesByName(cleanQuery, { limit, offset });
+      const state = get();
+      const results = profiles.map((profile) => withFriendshipStatus(profile, state));
+      set({ backendLoading: false, error: null });
+      return results;
+    } catch (error) {
+      set({ backendLoading: false, error: getVietnameseErrorMessage(error.message) });
+      return [];
     }
   },
 }));

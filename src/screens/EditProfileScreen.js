@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import GlassCard from '../components/GlassCard';
 import OrbitButton from '../components/OrbitButton';
@@ -15,6 +16,30 @@ export default function EditProfileScreen({ navigation }) {
   const [avatarUrl, setAvatarUrl] = useState(currentUser?.avatar_url || currentUser?.avatar || '');
   const [bio, setBio] = useState(currentUser?.bio || '');
   const [localError, setLocalError] = useState(null);
+
+  async function handlePickAvatar() {
+    setLocalError(null);
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setLocalError('Bạn cần cho phép Orbit mở thư viện ảnh để chọn ảnh đại diện.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.75,
+      base64: true,
+    });
+
+    if (result.canceled || !result.assets?.length) {
+      return;
+    }
+
+    const asset = result.assets[0];
+    setAvatarUrl(asset.base64 ? `data:image/jpeg;base64,${asset.base64}` : asset.uri);
+  }
 
   async function handleSave() {
     const trimmedName = name.trim();
@@ -58,17 +83,10 @@ export default function EditProfileScreen({ navigation }) {
               style={styles.input}
             />
 
-            <Text style={styles.label}>Ảnh đại diện</Text>
-            <TextInput
-              value={avatarUrl}
-              onChangeText={setAvatarUrl}
-              placeholder="https://..."
-              placeholderTextColor={colors.muted}
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
-              style={styles.input}
-            />
+            <View style={styles.avatarActions}>
+              <OrbitButton title="Chọn ảnh từ thư viện" variant="ghost" onPress={handlePickAvatar} />
+              <Text style={styles.avatarHint}>Ảnh sẽ được cắt vuông trước khi lưu hồ sơ.</Text>
+            </View>
 
             <Text style={styles.label}>Giới thiệu</Text>
             <TextInput
@@ -117,6 +135,15 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     borderColor: colors.accent,
     marginBottom: spacing.sm,
+  },
+  avatarActions: {
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  avatarHint: {
+    color: colors.muted,
+    fontSize: 13,
+    textAlign: 'center',
   },
   label: {
     color: colors.text,

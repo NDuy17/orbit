@@ -32,6 +32,12 @@
         {
           "locationWhenInUsePermission": "Cho phép Orbit dùng vị trí của bạn để hiển thị bạn ở giữa bản đồ và cập nhật đường đi."
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Cho phép Orbit mở thư viện ảnh để bạn chọn ảnh đại diện."
+        }
       ]
     ]
   }

@@ -12,8 +12,22 @@ import typography from '../theme/typography';
 
 export default function ProfileScreen({ navigation, route }) {
   const userId = route?.params?.userId;
-  const { currentUser, users, friends, backendLoading, error, loadCurrentProfile, refreshFriendData, logoutUser } =
-    useUserStore();
+  const {
+    currentUser,
+    users,
+    friends,
+    pendingRequests,
+    sentRequests,
+    backendLoading,
+    friendActionLoading,
+    error,
+    loadCurrentProfile,
+    refreshFriendData,
+    logoutUser,
+    requestFriend,
+    acceptRequestForUser,
+    removeFriendForUser,
+  } = useUserStore();
   const [viewProfile, setViewProfile] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState(null);
@@ -29,6 +43,34 @@ export default function ProfileScreen({ navigation, route }) {
         : viewProfile || localProfile,
     [currentUser, friends.length, isOwnProfile, localProfile, viewProfile]
   );
+  const friendshipStatus = useMemo(() => {
+    if (isOwnProfile || !userId) {
+      return 'self';
+    }
+
+    if (friends.some((friend) => friend.id === userId)) {
+      return 'friends';
+    }
+
+    if (pendingRequests.some((request) => request.sender_id === userId)) {
+      return 'pending_received';
+    }
+
+    if (sentRequests.some((request) => request.receiver_id === userId)) {
+      return 'pending_sent';
+    }
+
+    return 'none';
+  }, [friends, isOwnProfile, pendingRequests, sentRequests, userId]);
+  const actionLoading = Boolean(friendActionLoading[userId]);
+  const mutualFriendCount = useMemo(() => {
+    if (isOwnProfile || !profile) {
+      return 0;
+    }
+
+    const profileFriendIds = new Set((profile.friendIds || profile.friends_ids || []).filter(Boolean));
+    return profileFriendIds.size ? friends.filter((friend) => profileFriendIds.has(friend.id)).length : 0;
+  }, [friends, isOwnProfile, profile]);
 
   useEffect(() => {
     if (isOwnProfile) {
@@ -96,22 +138,52 @@ export default function ProfileScreen({ navigation, route }) {
             <Text style={styles.statNumber}>{profile?.friends || 0}</Text>
             <Text style={styles.statLabel}>Bạn bè</Text>
           </View>
-          <View style={styles.stat}>
-            <Text style={styles.statNumber}>{profile?.met || 0}</Text>
-            <Text style={styles.statLabel}>Đã gặp</Text>
-          </View>
-          <View style={styles.stat}>
-            <Text style={styles.statNumber}>{profile?.recent || 0}</Text>
-            <Text style={styles.statLabel}>Gần đây</Text>
-          </View>
+          {!isOwnProfile ? (
+            <View style={styles.stat}>
+              <Text style={styles.statNumber}>{mutualFriendCount}</Text>
+              <Text style={styles.statLabel}>Bạn chung</Text>
+            </View>
+          ) : null}
         </View>
         {isOwnProfile ? (
-          <>
-            <OrbitButton title="Chỉnh sửa hồ sơ" variant="ghost" onPress={handleEditProfile} />
-            <OrbitButton title="Đăng xuất" variant="ghost" onPress={handleLogout} />
-          </>
+          <View style={styles.actionRow}>
+            <OrbitButton title="Chỉnh sửa hồ sơ" variant="ghost" onPress={handleEditProfile} style={styles.actionButton} />
+            <OrbitButton title="Cài đặt" variant="ghost" onPress={() => navigation.navigate('Settings')} style={styles.actionButton} />
+            <OrbitButton title="Đăng xuất" variant="ghost" onPress={handleLogout} style={styles.actionButton} />
+          </View>
         ) : (
-          <OrbitButton title="Nhắn tin" onPress={() => navigation.navigate('Chat', { userId })} />
+          <View style={styles.actionRow}>
+            <OrbitButton title="Nhắn tin" onPress={() => navigation.navigate('Chat', { userId })} style={styles.actionButton} />
+            {friendshipStatus === 'friends' ? (
+              <OrbitButton
+                title={actionLoading ? 'Đang xóa...' : 'Xóa bạn bè'}
+                variant="ghost"
+                disabled={actionLoading}
+                onPress={() => removeFriendForUser(userId)}
+                style={styles.actionButton}
+              />
+            ) : null}
+            {friendshipStatus === 'pending_received' ? (
+              <OrbitButton
+                title={actionLoading ? 'Đang xử lý...' : 'Chấp nhận kết bạn'}
+                disabled={actionLoading}
+                onPress={() => acceptRequestForUser(userId)}
+                style={styles.actionButton}
+              />
+            ) : null}
+            {friendshipStatus === 'none' ? (
+              <OrbitButton
+                title={actionLoading ? 'Đang gửi...' : 'Kết bạn'}
+                variant="ghost"
+                disabled={actionLoading}
+                onPress={() => requestFriend(userId)}
+                style={styles.actionButton}
+              />
+            ) : null}
+            {friendshipStatus === 'pending_sent' ? (
+              <Text style={styles.pendingText}>Đã gửi lời mời kết bạn</Text>
+            ) : null}
+          </View>
         )}
       </GlassCard>
     </SafeAreaView>
@@ -189,5 +261,19 @@ const styles = StyleSheet.create({
   statLabel: {
     color: colors.muted,
     marginTop: 4,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: spacing.sm,
+  },
+  actionButton: {
+    minWidth: 132,
+  },
+  pendingText: {
+    color: colors.accent,
+    fontWeight: '800',
+    textAlign: 'center',
   },
 });
