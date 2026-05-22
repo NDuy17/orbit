@@ -6,13 +6,23 @@ function serializeForScript(value) {
   return JSON.stringify(value || null).replace(/</g, '\\u003c');
 }
 
-export function buildLeafletHtml({ users, currentLocation, trails, clusterLocation, routeTarget }) {
+export function buildLeafletHtml({
+  users,
+  currentLocation,
+  trails,
+  clusterLocation,
+  routeTarget,
+  recenterKey,
+  locationReady,
+}) {
   const initialData = serializeForScript({
     users: users || [],
     currentLocation,
     trails: trails || {},
     clusterLocation,
     routeTarget,
+    recenterKey,
+    locationReady,
   });
 
   return `
@@ -130,6 +140,12 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
       let currentMarker = null;
       let currentCircle = null;
       let clusterMarker = null;
+      let lastRecenterKey = initialData.recenterKey || 0;
+      let hasCenteredOnReadyLocation = Boolean(initialData.locationReady);
+      let latestCurrentLocation = hasLocation(initialData.currentLocation) ? initialData.currentLocation : null;
+      let isAwayFromCurrent = false;
+      let userMovedMapManually = false;
+      let isProgrammaticMove = false;
 
       function escapeValue(value) {
         return String(value || '')
@@ -153,12 +169,62 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
         layers.length = 0;
       }
 
+      function getIconKey(user) {
+        return [user.avatar || '', user.name || '', user.isOnline ? '1' : '0'].join('|');
+      }
+
+      function animateLatLng(layer, nextLatLng, duration) {
+        const start = layer.getLatLng();
+        const end = L.latLng(nextLatLng);
+
+        if (start.distanceTo(end) < 1) {
+          layer.setLatLng(end);
+          return;
+        }
+
+        if (layer._orbitAnimation) {
+          cancelAnimationFrame(layer._orbitAnimation);
+        }
+
+        const startedAt = performance.now();
+        const animate = function(now) {
+          const progress = Math.min((now - startedAt) / duration, 1);
+          const eased = 1 - Math.pow(1 - progress, 3);
+          const lat = start.lat + (end.lat - start.lat) * eased;
+          const lng = start.lng + (end.lng - start.lng) * eased;
+          layer.setLatLng([lat, lng]);
+
+          if (progress < 1) {
+            layer._orbitAnimation = requestAnimationFrame(animate);
+          } else {
+            layer._orbitAnimation = null;
+          }
+        };
+
+        layer._orbitAnimation = requestAnimationFrame(animate);
+      }
+
       function postToApp(message) {
         const value = JSON.stringify(message);
         if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
           window.ReactNativeWebView.postMessage(value);
         } else if (window.parent) {
           window.parent.postMessage(value, '*');
+        }
+      }
+
+      function updateAwayFromCurrent() {
+        if (!latestCurrentLocation || !userMovedMapManually) {
+          return;
+        }
+
+        const currentLatLng = L.latLng(getLatLng(latestCurrentLocation));
+        const distance = map.getCenter().distanceTo(currentLatLng);
+        const nextAway = distance > 220;
+
+        if (nextAway !== isAwayFromCurrent) {
+          isAwayFromCurrent = nextAway;
+          postToApp({ type: 'awayFromUserChanged', isAwayFromUser: nextAway });
         }
       }
 
@@ -188,15 +254,16 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
           return;
         }
 
+        latestCurrentLocation = location;
         const latLng = getLatLng(location);
         if (currentMarker) {
-          currentMarker.setLatLng(latLng);
+          animateLatLng(currentMarker, latLng, 900);
         } else {
           currentMarker = L.marker(latLng, { icon: currentIcon }).addTo(map);
         }
 
         if (currentCircle) {
-          currentCircle.setLatLng(latLng);
+          animateLatLng(currentCircle, latLng, 900);
         } else {
           currentCircle = L.circle(latLng, {
             radius: 180,
@@ -213,6 +280,10 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
           return;
         }
 
+        isProgrammaticMove = true;
+        map.once('moveend', function() {
+          isProgrammaticMove = false;
+        });
         map.setView(getLatLng(location), Math.max(map.getZoom(), 16), {
           animate: true,
           duration: 0.4
@@ -247,14 +318,19 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
           const existingMarker = userMarkers[markerKey];
 
           if (existingMarker) {
-            existingMarker.setLatLng(latLng);
-            existingMarker.setIcon(buildUserIcon(user));
+            animateLatLng(existingMarker, latLng, 900);
+            const nextIconKey = getIconKey(user);
+            if (existingMarker._orbitIconKey !== nextIconKey) {
+              existingMarker.setIcon(buildUserIcon(user));
+              existingMarker._orbitIconKey = nextIconKey;
+            }
             return;
           }
 
           const marker = L.marker(latLng, {
             icon: buildUserIcon(user)
           }).addTo(map);
+          marker._orbitIconKey = getIconKey(user);
 
           marker.on('click', () => {
             postToApp({ type: 'selectUser', userId: user.id });
@@ -304,6 +380,10 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
         }).addTo(map);
 
         routeLayers.push(routeLine, startCircle, meetMarker);
+        isProgrammaticMove = true;
+        map.once('moveend', function() {
+          isProgrammaticMove = false;
+        });
         map.fitBounds(routeLine.getBounds(), {
           padding: [80, 80],
           maxZoom: 17
@@ -357,7 +437,16 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
         drawUsers(nextData.users || []);
         drawRoute(nextData.routeTarget, nextLocation);
 
-        if (!nextData.routeTarget) {
+        if (nextData.locationReady && !hasCenteredOnReadyLocation) {
+          hasCenteredOnReadyLocation = true;
+          centerOnCurrent(nextLocation);
+        } else if (nextData.recenterKey !== undefined && nextData.recenterKey !== lastRecenterKey) {
+          lastRecenterKey = nextData.recenterKey;
+          isAwayFromCurrent = false;
+          userMovedMapManually = false;
+          postToApp({ type: 'awayFromUserChanged', isAwayFromUser: false });
+          centerOnCurrent(nextLocation);
+        } else if (!userMovedMapManually && !nextData.routeTarget) {
           centerOnCurrent(nextLocation);
         }
 
@@ -393,6 +482,12 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
       drawUsers(initialData.users || []);
       drawRoute(initialData.routeTarget, initialData.currentLocation);
       drawCluster(initialData.clusterLocation);
+      map.on('dragstart zoomstart', function() {
+        if (!isProgrammaticMove) {
+          userMovedMapManually = true;
+        }
+      });
+      map.on('moveend', updateAwayFromCurrent);
     </script>
   </body>
 </html>`;
@@ -404,6 +499,9 @@ export default function LeafletMap({
   trails,
   clusterLocation,
   routeTarget,
+  recenterKey = 0,
+  locationReady = false,
+  onAwayFromUserChange,
   onSelectUser,
 }) {
   const webViewRef = useRef(null);
@@ -417,6 +515,8 @@ export default function LeafletMap({
       trails,
       clusterLocation,
       routeTarget,
+      recenterKey,
+      locationReady,
     });
   }
 
@@ -428,10 +528,12 @@ export default function LeafletMap({
       users: users || [],
       currentLocation,
       routeTarget,
+      recenterKey,
+      locationReady,
       trails: trails || {},
       clusterLocation,
     }),
-    [clusterLocation, currentLocation, routeTarget, trails, users]
+    [clusterLocation, currentLocation, locationReady, recenterKey, routeTarget, trails, users]
   );
 
   function sendUpdateToWebFrame() {
@@ -460,6 +562,8 @@ export default function LeafletMap({
         if (message.type === 'selectUser') {
           const user = users.find((item) => item.id === message.userId);
           onSelectUser(user);
+        } else if (message.type === 'awayFromUserChanged') {
+          onAwayFromUserChange?.(Boolean(message.isAwayFromUser));
         }
       } catch (error) {
         return;
@@ -468,7 +572,7 @@ export default function LeafletMap({
 
     window.addEventListener('message', handleWebMessage);
     return () => window.removeEventListener('message', handleWebMessage);
-  }, [onSelectUser, users]);
+  }, [onAwayFromUserChange, onSelectUser, users]);
 
   if (Platform.OS === 'web') {
     return React.createElement('iframe', {
@@ -492,6 +596,8 @@ export default function LeafletMap({
       if (message.type === 'selectUser') {
         const user = users.find((item) => item.id === message.userId);
         onSelectUser(user);
+      } else if (message.type === 'awayFromUserChanged') {
+        onAwayFromUserChange?.(Boolean(message.isAwayFromUser));
       }
     } catch (error) {
       onSelectUser(null);

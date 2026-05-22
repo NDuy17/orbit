@@ -8,7 +8,6 @@ import UserBottomSheet from '../components/UserBottomSheet';
 import { clusterLocation, userTrails } from '../data/mockLocations';
 import {
   fetchVisibleNearbyUsers,
-  getDeviceLocation,
   getFastDeviceLocation,
   saveCurrentUserLocation,
   subscribeToLocations,
@@ -83,6 +82,8 @@ export default function HomeMapScreen({ navigation }) {
   const latestLocation = useRef(currentLocation);
   const [locationReady, setLocationReady] = useState(false);
   const [routeTarget, setRouteTarget] = useState(null);
+  const [recenterKey, setRecenterKey] = useState(0);
+  const [isMapAwayFromUser, setIsMapAwayFromUser] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
   const [mapUsers, setMapUsers] = useState([]);
   const onlineFriendCount = friends.filter((friend) => friend.isOnline).length;
@@ -145,15 +146,6 @@ export default function HomeMapScreen({ navigation }) {
         } else {
           unsubscribeDeviceLocation();
         }
-
-        try {
-          const accurateLocation = await getDeviceLocation();
-          if (active) {
-            applyDeviceLocation(accurateLocation);
-          }
-        } catch {
-          // The live watcher already keeps the map moving; this one-time precise fix is best effort.
-        }
       } catch (err) {
         if (active) {
           setLocationReady(false);
@@ -214,21 +206,19 @@ export default function HomeMapScreen({ navigation }) {
 
     let active = true;
 
-    async function refreshLocations({ shouldSaveLocation = false } = {}) {
+    async function refreshLocations() {
       try {
         const deviceLocation = latestLocation.current;
         if (!active) {
           return;
         }
 
-        if (shouldSaveLocation) {
-          await saveCurrentUserLocation({
-            userId: currentUser.id,
-            ghostMode,
-            approximateLocation,
-            coords: deviceLocation,
-          });
-        }
+        await saveCurrentUserLocation({
+          userId: currentUser.id,
+          ghostMode,
+          approximateLocation,
+          coords: deviceLocation,
+        });
 
         const nearbyUsers = await fetchVisibleNearbyUsers({
           currentUserId: currentUser.id,
@@ -245,10 +235,48 @@ export default function HomeMapScreen({ navigation }) {
       }
     }
 
-    refreshLocations({ shouldSaveLocation: true });
-    const interval = setInterval(() => {
-      refreshLocations({ shouldSaveLocation: true });
-    }, 15000);
+    refreshLocations();
+
+    return () => {
+      active = false;
+    };
+  }, [
+    approximateLocation,
+    currentLocation,
+    currentUser?.id,
+    friendIds,
+    friendIdsKey,
+    ghostMode,
+    isBackendReady,
+    locationReady,
+    radius,
+    setLocationError,
+    setUsers,
+  ]);
+
+  useEffect(() => {
+    if (!isBackendReady || !currentUser?.id || !locationReady) {
+      return undefined;
+    }
+
+    let active = true;
+
+    async function refreshNearbyUsers() {
+      try {
+        const nearbyUsers = await fetchVisibleNearbyUsers({
+          currentUserId: currentUser.id,
+          currentCoords: latestLocation.current,
+          radius,
+          friendIds,
+        });
+
+        if (active) {
+          setUsers(nearbyUsers);
+        }
+      } catch (err) {
+        setLocationError(getVietnameseErrorMessage(err.message));
+      }
+    }
 
     const unsubscribe = subscribeToLocations((payload) => {
       const changedUserId = payload?.new?.user_id || payload?.old?.user_id;
@@ -260,9 +288,7 @@ export default function HomeMapScreen({ navigation }) {
         clearTimeout(refreshTimer.current);
       }
 
-      refreshTimer.current = setTimeout(() => {
-        refreshLocations({ shouldSaveLocation: false });
-      }, 800);
+      refreshTimer.current = setTimeout(refreshNearbyUsers, 800);
     });
 
     return () => {
@@ -270,15 +296,12 @@ export default function HomeMapScreen({ navigation }) {
       if (refreshTimer.current) {
         clearTimeout(refreshTimer.current);
       }
-      clearInterval(interval);
       unsubscribe();
     };
   }, [
-    approximateLocation,
     currentUser?.id,
     friendIds,
     friendIdsKey,
-    ghostMode,
     isBackendReady,
     locationReady,
     radius,
@@ -306,6 +329,12 @@ export default function HomeMapScreen({ navigation }) {
     }
   }
 
+  const handleRecenterOnUser = useCallback(() => {
+    setRouteTarget(null);
+    setIsMapAwayFromUser(false);
+    setRecenterKey((value) => value + 1);
+  }, []);
+
   return (
     <View style={styles.container}>
       <LeafletMap
@@ -314,6 +343,9 @@ export default function HomeMapScreen({ navigation }) {
         trails={isBackendReady ? emptyTrails : userTrails}
         clusterLocation={isBackendReady ? null : clusterLocation}
         routeTarget={routeTarget}
+        recenterKey={recenterKey}
+        locationReady={locationReady}
+        onAwayFromUserChange={setIsMapAwayFromUser}
         onSelectUser={handleSelectUserFromMap}
       />
 
@@ -327,7 +359,11 @@ export default function HomeMapScreen({ navigation }) {
               <Text style={styles.metricText}>{privacyLabel}</Text>
             </View>
             <Text style={styles.cardText}>
-              {locationLoading ? 'Đang lấy vị trí của bạn...' : 'Đang quét quanh bạn...'}
+              {locationLoading
+                ? 'Đang lấy vị trí của bạn...'
+                : locationReady
+                  ? 'Bản đồ đã sẵn sàng'
+                  : 'Đang chuẩn bị bản đồ...'}
             </Text>
           </GlassCard>
         </AutoHideNotice>
@@ -352,6 +388,14 @@ export default function HomeMapScreen({ navigation }) {
           </GlassCard>
         ) : null}
       </SafeAreaView>
+
+      {isMapAwayFromUser ? (
+        <SafeAreaView pointerEvents="box-none" style={styles.recenterFloating}>
+          <Pressable style={styles.recenterButton} onPress={handleRecenterOnUser}>
+            <Text style={styles.recenterText}>Về vị trí của tôi</Text>
+          </Pressable>
+        </SafeAreaView>
+      ) : null}
 
       <UserBottomSheet
         user={selectedUser}
@@ -440,5 +484,27 @@ const styles = StyleSheet.create({
   retryText: {
     color: colors.accent,
     fontWeight: '800',
+  },
+  recenterFloating: {
+    position: 'absolute',
+    right: spacing.lg,
+    bottom: Platform.OS === 'android' ? spacing.xl : spacing.lg,
+    pointerEvents: 'box-none',
+  },
+  recenterButton: {
+    alignSelf: 'flex-end',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 999,
+    backgroundColor: colors.accent,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.28,
+    shadowRadius: 14,
+    elevation: 8,
+  },
+  recenterText: {
+    color: colors.background,
+    fontWeight: '900',
   },
 });
