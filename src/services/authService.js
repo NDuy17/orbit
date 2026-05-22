@@ -1,4 +1,4 @@
-import { createProfile } from './profileService';
+import { createProfile } from './profileService.js';
 import { requireSupabase, supabase } from './supabase';
 import DEFAULT_AVATAR_URL from '../constants/defaultAvatar';
 

@@ -1,4 +1,5 @@
 import DEFAULT_AVATAR_URL from '../constants/defaultAvatar';
+import { textOr } from '../utils/text';
 import { requireSupabase, supabase } from './supabase';
 
 function formatLastActiveTime(value) {
@@ -21,11 +22,11 @@ export function mapProfileRow(row) {
 
   return {
     id: row.id,
-    name: row.full_name || row.username || row.name || 'Người dùng Orbit',
+    name: textOr(row.full_name || row.username || row.name, 'Người dùng Orbit'),
     avatar: row.avatar_url || DEFAULT_AVATAR_URL,
     avatar_url: row.avatar_url,
-    bio: row.bio || '',
-    status: row.status || '',
+    bio: textOr(row.bio, ''),
+    status: textOr(row.status, ''),
     isOnline: Boolean(row.is_online),
     lastActive: row.is_online ? 'Đang online' : `Hoạt động lúc ${formatLastActiveTime(row.last_active)}`,
     friends: row.friends_count || 0,
@@ -39,10 +40,10 @@ export async function createProfile(userId, profile) {
   const payload = {
     id: userId,
     username: profile.username || null,
-    full_name: profile.name || profile.full_name || 'Người dùng Orbit',
+    full_name: textOr(profile.name || profile.full_name, 'Người dùng Orbit'),
     avatar_url: profile.avatar_url || profile.avatar || DEFAULT_AVATAR_URL,
-    bio: profile.bio || '',
-    status: profile.status || 'Mới tham gia Orbit',
+    bio: textOr(profile.bio, ''),
+    status: textOr(profile.status, 'Mới tham gia Orbit'),
     is_online: true,
     last_active: new Date().toISOString(),
   };

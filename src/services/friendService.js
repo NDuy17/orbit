@@ -19,10 +19,7 @@ async function fetchProfilesByIds(client, ids) {
     return {};
   }
 
-  const { data, error } = await client
-    .from('profiles')
-    .select('id, username, full_name, avatar_url, bio, status, is_online, last_active')
-    .in('id', uniqueIds);
+  const { data, error } = await client.from('profiles').select('*').in('id', uniqueIds);
 
   if (error) {
     throw error;
@@ -30,6 +27,35 @@ async function fetchProfilesByIds(client, ids) {
 
   return (data || []).reduce((items, profile) => {
     items[profile.id] = profile;
+    return items;
+  }, {});
+}
+
+async function fetchLatestLocationsByUserIds(client, ids) {
+  const uniqueIds = [...new Set((ids || []).filter(Boolean))];
+
+  if (!uniqueIds.length) {
+    return {};
+  }
+
+  const { data, error } = await client
+    .from('locations')
+    .select('user_id, latitude, longitude, public_latitude, public_longitude, updated_at')
+    .in('user_id', uniqueIds)
+    .eq('is_visible', true)
+    .order('updated_at', { ascending: false });
+
+  if (error) {
+    return {};
+  }
+
+  return (data || []).reduce((items, location) => {
+    if (!items[location.user_id]) {
+      items[location.user_id] = {
+        latitude: location.latitude || location.public_latitude,
+        longitude: location.longitude || location.public_longitude,
+      };
+    }
     return items;
   }, {});
 }
@@ -96,16 +122,21 @@ export async function fetchFriendshipSnapshot() {
     throw requestError;
   }
 
-  const profileMap = await fetchProfilesByIds(client, [
+  const relatedUserIds = [
     ...(friendRows || []).map((row) => row.friend_id),
     ...(requestRows || []).map((row) => row.sender_id),
     ...(requestRows || []).map((row) => row.receiver_id),
-  ]);
+  ];
+  const profileMap = await fetchProfilesByIds(client, relatedUserIds);
+  const locationMap = await fetchLatestLocationsByUserIds(client, relatedUserIds);
 
   const friendIdSet = new Set((friendRows || []).map((row) => row.friend_id));
 
   const friends = [...friendIdSet]
-    .map((friendId) => profileMap[friendId])
+    .map((friendId) => {
+      const profile = profileMap[friendId];
+      return profile ? { ...profile, location: locationMap[friendId] || null } : null;
+    })
     .filter(Boolean);
 
   const pendingRequests = (requestRows || [])

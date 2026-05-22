@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import OrbitButton from '../components/OrbitButton';
@@ -25,30 +25,15 @@ const valueCards = [
 ];
 
 export default function OnboardingScreen({ navigation }) {
-  const timerRef = useRef(null);
-
-  useEffect(() => {
-    timerRef.current = setTimeout(() => navigation.replace('Login'), 5000);
-
-    return () => clearTimeout(timerRef.current);
-  }, [navigation]);
-
-  function clearAutoRedirect() {
-    clearTimeout(timerRef.current);
-  }
-
   function handleStart() {
-    clearAutoRedirect();
     navigation.replace('Login');
   }
 
   function handleRegister() {
-    clearAutoRedirect();
     navigation.navigate('Register');
   }
 
   function handleLogin() {
-    clearAutoRedirect();
     navigation.replace('Login');
   }
 

@@ -7,9 +7,10 @@ import {
   rejectFriendRequest,
   sendFriendRequest,
 } from '../services/friendService';
-import { createProfile, fetchCurrentUserProfile, mapProfileRow, updateOnlineStatus } from '../services/profileService';
+import { createProfile, fetchCurrentUserProfile, mapProfileRow, updateOnlineStatus, updateProfile } from '../services/profileService.js';
 import { hasSupabaseConfig } from '../services/supabase';
 import { getVietnameseErrorMessage } from '../utils/errorMessages';
+import { textOr } from '../utils/text';
 
 const mockFriends = mockUsers.filter((user) => user.isFriend);
 
@@ -19,11 +20,29 @@ function mapFriendProfile(row) {
     distance: 0,
     isFriend: true,
     friendshipStatus: 'friends',
+    friends: row.friends_count || row.friends || 0,
+    met: row.encounters_count || row.met || 0,
+    recent: row.recent_count || row.recent || 0,
     location: row.location
       ? row.location
       : row.latitude && row.longitude
         ? { latitude: row.latitude, longitude: row.longitude }
         : null,
+  };
+}
+
+function getOwnFriendCount(state, fallback = 0) {
+  return state.friends.length || fallback || 0;
+}
+
+function withOwnStats(profile, state) {
+  if (!profile) {
+    return profile;
+  }
+
+  return {
+    ...profile,
+    friends: getOwnFriendCount(state, profile.friends),
   };
 }
 
@@ -138,7 +157,9 @@ const useUserStore = create((set, get) => ({
 
       return {
         currentUser:
-          state.currentUser.id === mappedProfile.id ? applyProfile(state.currentUser) : state.currentUser,
+          state.currentUser.id === mappedProfile.id
+            ? withOwnStats(applyProfile(state.currentUser), state)
+            : state.currentUser,
         users: state.users.map(applyProfile),
         friends: state.friends.map(applyProfile),
         selectedUser:
@@ -267,7 +288,7 @@ const useUserStore = create((set, get) => ({
     try {
       const profile = await fetchCurrentUserProfile();
       if (profile) {
-        set({ currentUser: profile, backendLoading: false });
+        set((state) => ({ currentUser: withOwnStats(profile, state), backendLoading: false }));
       } else {
         set({ backendLoading: false });
       }
@@ -278,7 +299,7 @@ const useUserStore = create((set, get) => ({
           const profile = await createProfile(get().session.user.id, {
             name: get().session.user.email || 'Người dùng Orbit',
           });
-          set({ currentUser: profile, backendLoading: false });
+          set((state) => ({ currentUser: withOwnStats(profile, state), backendLoading: false }));
           return profile;
         } catch (createError) {
           set({ error: getVietnameseErrorMessage(createError.message), backendLoading: false });
@@ -291,6 +312,47 @@ const useUserStore = create((set, get) => ({
     }
   },
 
+  saveCurrentProfile: async (updates) => {
+    const current = get().currentUser;
+    const nextUpdates = {
+      name: textOr(updates.name, current.name),
+      avatar_url: updates.avatar_url || updates.avatar,
+      bio: textOr(updates.bio, ''),
+      status: textOr(updates.status, current.status || ''),
+    };
+
+    if (!hasSupabaseConfig) {
+      const profile = {
+        ...current,
+        name: nextUpdates.name,
+        avatar: nextUpdates.avatar_url || current.avatar,
+        avatar_url: nextUpdates.avatar_url || current.avatar_url,
+        bio: nextUpdates.bio,
+        status: nextUpdates.status,
+      };
+      set({ currentUser: profile, error: null });
+      return profile;
+    }
+
+    set({ backendLoading: true, error: null });
+    try {
+      const profile = await updateProfile(current.id, nextUpdates);
+      set((state) => ({
+        currentUser: withOwnStats(profile, state),
+        users: state.users.map((user) => (user.id === profile.id ? { ...user, ...profile } : user)),
+        friends: state.friends.map((friend) => (friend.id === profile.id ? { ...friend, ...profile } : friend)),
+        selectedUser:
+          state.selectedUser?.id === profile.id ? { ...state.selectedUser, ...profile } : state.selectedUser,
+        backendLoading: false,
+        error: null,
+      }));
+      return profile;
+    } catch (error) {
+      set({ error: getVietnameseErrorMessage(error.message), backendLoading: false });
+      throw error;
+    }
+  },
+
   setOnlineStatus: async (isOnline) => {
     if (!hasSupabaseConfig) {
       return;
@@ -299,7 +361,7 @@ const useUserStore = create((set, get) => ({
     try {
       const profile = await updateOnlineStatus(isOnline);
       if (profile) {
-        set({ currentUser: profile, error: null });
+        set((state) => ({ currentUser: withOwnStats(profile, state), error: null }));
       }
     } catch (error) {
       // Presence updates are best-effort. Do not flash an app-wide error if the
@@ -316,9 +378,10 @@ const useUserStore = create((set, get) => ({
     try {
       const snapshot = await fetchFriendshipSnapshot();
       set((state) => {
+        const mappedFriends = snapshot.friends.map(mapFriendProfile);
         const nextState = {
           ...state,
-          friends: snapshot.friends.map(mapFriendProfile),
+          friends: mappedFriends,
           pendingRequests: snapshot.pendingRequests,
           sentRequests: snapshot.sentRequests,
           error: null,
@@ -326,6 +389,10 @@ const useUserStore = create((set, get) => ({
         };
 
         return {
+          currentUser: {
+            ...nextState.currentUser,
+            friends: mappedFriends.length,
+          },
           friends: nextState.friends.map((friend) => withFriendshipStatus(friend, nextState)),
           pendingRequests: nextState.pendingRequests,
           sentRequests: nextState.sentRequests,
@@ -431,6 +498,10 @@ const useUserStore = create((set, get) => ({
       };
 
       return {
+        currentUser: {
+          ...nextState.currentUser,
+          friends: nextFriends.length,
+        },
         friends: nextState.friends.map((friend) => withFriendshipStatus(friend, nextState)),
         pendingRequests: nextState.pendingRequests,
         sentRequests: nextState.sentRequests,

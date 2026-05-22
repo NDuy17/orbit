@@ -124,7 +124,7 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
       const initialData = ${initialData};
-      let userMarkers = [];
+      let userMarkers = {};
       let routeLayers = [];
       let trailLayers = [];
       let currentMarker = null;
@@ -234,13 +234,25 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
       }
 
       function drawUsers(nextUsers) {
-        clearLayers(userMarkers);
+        const nextIds = new Set();
+
         (nextUsers || []).forEach((user) => {
           if (!hasLocation(user.location)) {
             return;
           }
 
-          const marker = L.marker(getLatLng(user.location), {
+          nextIds.add(String(user.id));
+          const markerKey = String(user.id);
+          const latLng = getLatLng(user.location);
+          const existingMarker = userMarkers[markerKey];
+
+          if (existingMarker) {
+            existingMarker.setLatLng(latLng);
+            existingMarker.setIcon(buildUserIcon(user));
+            return;
+          }
+
+          const marker = L.marker(latLng, {
             icon: buildUserIcon(user)
           }).addTo(map);
 
@@ -248,7 +260,14 @@ export function buildLeafletHtml({ users, currentLocation, trails, clusterLocati
             postToApp({ type: 'selectUser', userId: user.id });
           });
 
-          userMarkers.push(marker);
+          userMarkers[markerKey] = marker;
+        });
+
+        Object.keys(userMarkers).forEach((id) => {
+          if (!nextIds.has(id)) {
+            map.removeLayer(userMarkers[id]);
+            delete userMarkers[id];
+          }
         });
       }
 

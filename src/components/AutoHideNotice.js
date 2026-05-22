@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, StyleSheet } from 'react-native';
+import { Animated, Platform, StyleSheet } from 'react-native';
 
 export default function AutoHideNotice({ children, delay = 5000, style }) {
   const opacity = useRef(new Animated.Value(0)).current;
@@ -10,13 +10,13 @@ export default function AutoHideNotice({ children, delay = 5000, style }) {
       Animated.timing(opacity, {
         toValue: 1,
         duration: 450,
-        useNativeDriver: true,
+        useNativeDriver: Platform.OS !== 'web',
       }),
       Animated.delay(delay),
       Animated.timing(opacity, {
         toValue: 0,
         duration: 650,
-        useNativeDriver: true,
+        useNativeDriver: Platform.OS !== 'web',
       }),
     ]).start(() => setVisible(false));
   }, [delay, opacity]);

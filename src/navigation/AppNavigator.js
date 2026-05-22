@@ -5,6 +5,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import ChatScreen from '../screens/ChatScreen';
+import EditProfileScreen from '../screens/EditProfileScreen';
 import FriendsScreen from '../screens/FriendsScreen';
 import HomeMapScreen from '../screens/HomeMapScreen';
 import LoginScreen from '../screens/LoginScreen';
@@ -14,7 +15,7 @@ import PrivacyScreen from '../screens/PrivacyScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import RegisterScreen from '../screens/RegisterScreen';
 import { subscribeToFriendRequests, subscribeToFriends } from '../services/friendService';
-import { subscribeToProfiles } from '../services/profileService';
+import { subscribeToProfiles } from '../services/profileService.js';
 import useUserStore from '../store/userStore';
 import colors from '../theme/colors';
 
@@ -46,6 +47,18 @@ function OrbitLoading() {
   );
 }
 
+const TAB_ICONS = {
+  HomeMap: ['map-outline', 'map'],
+  Nearby: ['navigate-circle-outline', 'navigate-circle'],
+  Friends: ['people-outline', 'people'],
+  Profile: ['person-circle-outline', 'person-circle'],
+};
+
+function TabIcon({ routeName, color, focused }) {
+  const [inactiveIcon, activeIcon] = TAB_ICONS[routeName] || TAB_ICONS.HomeMap;
+  return <Ionicons name={focused ? activeIcon : inactiveIcon} size={routeName === 'Profile' ? 24 : 23} color={color} />;
+}
+
 function MainTabs() {
   return (
     <Tab.Navigator
@@ -63,9 +76,7 @@ function MainTabs() {
         component={HomeMapScreen}
         options={{
           title: 'Bản đồ',
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'map' : 'map-outline'} size={22} color={color} />
-          ),
+          tabBarIcon: (props) => <TabIcon routeName="HomeMap" {...props} />,
         }}
       />
       <Tab.Screen
@@ -73,9 +84,7 @@ function MainTabs() {
         component={NearbyScreen}
         options={{
           title: 'Gần đây',
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'navigate-circle' : 'navigate-circle-outline'} size={23} color={color} />
-          ),
+          tabBarIcon: (props) => <TabIcon routeName="Nearby" {...props} />,
         }}
       />
       <Tab.Screen
@@ -83,9 +92,7 @@ function MainTabs() {
         component={FriendsScreen}
         options={{
           title: 'Bạn bè',
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'people' : 'people-outline'} size={23} color={color} />
-          ),
+          tabBarIcon: (props) => <TabIcon routeName="Friends" {...props} />,
         }}
       />
       <Tab.Screen
@@ -93,9 +100,7 @@ function MainTabs() {
         component={ProfileScreen}
         options={{
           title: 'Hồ sơ',
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'person-circle' : 'person-circle-outline'} size={24} color={color} />
-          ),
+          tabBarIcon: (props) => <TabIcon routeName="Profile" {...props} />,
         }}
       />
     </Tab.Navigator>
@@ -249,6 +254,7 @@ export default function AppNavigator() {
         <Stack.Screen name="MainTabs" component={MainTabs} options={{ headerShown: false }} />
         <Stack.Screen name="Chat" component={ChatScreen} options={{ title: 'Tin nhắn' }} />
         <Stack.Screen name="UserProfile" component={ProfileScreen} options={{ title: 'Hồ sơ' }} />
+        <Stack.Screen name="EditProfile" component={EditProfileScreen} options={{ title: 'Chỉnh sửa hồ sơ' }} />
         <Stack.Screen name="Privacy" component={PrivacyScreen} options={{ title: 'Riêng tư' }} />
       </Stack.Navigator>
     </NavigationContainer>

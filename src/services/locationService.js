@@ -2,6 +2,7 @@
 import DEFAULT_AVATAR_URL from '../constants/defaultAvatar';
 import { currentLocation } from '../data/mockLocations';
 import { calculateCoordinateDistance } from '../utils/distance';
+import { textOr } from '../utils/text';
 import { requireSupabase, supabase } from './supabase';
 
 function roundCoordinate(value) {
@@ -126,20 +127,30 @@ async function saveLocationPayload(client, payload) {
 function normalizeLocationUser(row, friendIds) {
   const profile = row.profile || {};
   const isFriend = friendIds.includes(row.user_id);
-  const latitude = isFriend ? row.latitude : row.public_latitude || row.latitude;
-  const longitude = isFriend ? row.longitude : row.public_longitude || row.longitude;
+  const exactLocation = row.location || profile.location || {
+    latitude: row.latitude,
+    longitude: row.longitude,
+  };
+  const publicLocation = {
+    latitude: row.public_latitude || exactLocation.latitude,
+    longitude: row.public_longitude || exactLocation.longitude,
+  };
+  const displayLocation = isFriend ? exactLocation : publicLocation;
 
   return {
     id: row.user_id,
-    name: profile.full_name || profile.username || profile.name || 'Người dùng Orbit',
+    name: textOr(profile.full_name || profile.username || profile.name, 'Người dùng Orbit'),
     avatar: profile.avatar_url || DEFAULT_AVATAR_URL,
-    status: profile.status || 'Đang dùng Orbit',
-    bio: profile.bio || '',
+    status: textOr(profile.status, 'Đang dùng Orbit'),
+    bio: textOr(profile.bio, ''),
     isOnline: Boolean(profile.is_online),
     lastActive: profile.is_online ? 'Đang online' : 'Offline',
     distance: row.distance || 0,
     isFriend,
-    location: { latitude, longitude },
+    friends: row.friends_count || profile.friends_count || profile.friends || 0,
+    met: row.encounters_count || profile.encounters_count || profile.met || 0,
+    recent: row.recent_count || profile.recent_count || profile.recent || 0,
+    location: displayLocation,
   };
 }
 
@@ -237,7 +248,7 @@ export async function fetchVisibleNearbyUsers({ currentUserId, currentCoords, ra
   if (profileIds.length) {
     const { data: profiles, error: profileError } = await client
       .from('profiles')
-      .select('id, username, full_name, avatar_url, bio, status, is_online, last_active')
+      .select('*')
       .in('id', profileIds);
 
     if (profileError) {

@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import GlassCard from '../components/GlassCard';
 import OrbitButton from '../components/OrbitButton';
 import UserAvatar from '../components/UserAvatar';
-import { fetchProfileById } from '../services/profileService';
+import { fetchProfileById } from '../services/profileService.js';
 import useUserStore from '../store/userStore';
 import colors from '../theme/colors';
 import spacing from '../theme/spacing';
@@ -12,7 +12,7 @@ import typography from '../theme/typography';
 
 export default function ProfileScreen({ navigation, route }) {
   const userId = route?.params?.userId;
-  const { currentUser, users, friends, backendLoading, error, loadCurrentProfile, logoutUser } =
+  const { currentUser, users, friends, backendLoading, error, loadCurrentProfile, refreshFriendData, logoutUser } =
     useUserStore();
   const [viewProfile, setViewProfile] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
@@ -22,11 +22,18 @@ export default function ProfileScreen({ navigation, route }) {
     () => [...users, ...friends].find((item) => item.id === userId),
     [friends, userId, users]
   );
-  const profile = isOwnProfile ? currentUser : viewProfile || localProfile;
+  const profile = useMemo(
+    () =>
+      isOwnProfile
+        ? { ...currentUser, friends: friends.length || currentUser.friends || 0 }
+        : viewProfile || localProfile,
+    [currentUser, friends.length, isOwnProfile, localProfile, viewProfile]
+  );
 
   useEffect(() => {
     if (isOwnProfile) {
       loadCurrentProfile();
+      refreshFriendData();
       return undefined;
     }
 
@@ -56,7 +63,7 @@ export default function ProfileScreen({ navigation, route }) {
     return () => {
       active = false;
     };
-  }, [isOwnProfile, loadCurrentProfile, userId]);
+  }, [isOwnProfile, loadCurrentProfile, refreshFriendData, userId]);
 
   async function handleLogout() {
     await logoutUser();
@@ -64,7 +71,7 @@ export default function ProfileScreen({ navigation, route }) {
   }
 
   function handleEditProfile() {
-    Alert.alert('Sắp có', 'Tính năng chỉnh sửa hồ sơ sẽ sớm ra mắt!');
+    navigation.navigate('EditProfile');
   }
 
   return (
