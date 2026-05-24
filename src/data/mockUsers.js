@@ -6,6 +6,8 @@ export const currentUser = {
   avatar: 'https://i.pravatar.cc/160?img=47',
   bio: 'Đang mở Orbit để gặp thêm người thú vị quanh mình.',
   status: 'Đang ở trung tâm Sài Gòn',
+  isOnline: true,
+  lastActive: 'Đang online',
   friends: 128,
   met: 42,
   recent: 12,

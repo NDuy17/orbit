@@ -24,6 +24,19 @@ function formatRadiusLabel(value) {
   return value >= 1000 ? `${value / 1000}km` : `${value}m`;
 }
 
+function sortFriendsFirst(items) {
+  return [...items].sort((first, second) => {
+    const firstIsFriend = first.friendshipStatus === 'friends' || first.isFriend;
+    const secondIsFriend = second.friendshipStatus === 'friends' || second.isFriend;
+
+    if (firstIsFriend === secondIsFriend) {
+      return 0;
+    }
+
+    return firstIsFriend ? -1 : 1;
+  });
+}
+
 export default function FriendsScreen({ navigation }) {
   const {
     users,
@@ -102,7 +115,7 @@ export default function FriendsScreen({ navigation }) {
     setSearching(true);
     searchTimerRef.current = setTimeout(async () => {
       const results = await searchUsersByName(cleanQuery, { limit: searchPageSize, offset: 0 });
-      setSearchResults(results);
+      setSearchResults(sortFriendsFirst(results));
       setSearchOffset(results.length);
       setHasMoreSearchResults(results.length === searchPageSize);
       setSearching(false);
@@ -122,7 +135,7 @@ export default function FriendsScreen({ navigation }) {
     });
     setSearchResults((items) => {
       const existingIds = new Set(items.map((item) => item.id));
-      return [...items, ...results.filter((item) => !existingIds.has(item.id))];
+      return sortFriendsFirst([...items, ...results.filter((item) => !existingIds.has(item.id))]);
     });
     setSearchOffset((value) => value + results.length);
     setHasMoreSearchResults(results.length === searchPageSize);

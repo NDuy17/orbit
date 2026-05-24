@@ -5,6 +5,7 @@ import colors, { themePalettes } from '../theme/colors';
 import useThemeStore from '../store/themeStore';
 import spacing from '../theme/spacing';
 import typography from '../theme/typography';
+import { blurActiveWebElement } from '../utils/focus';
 
 const themeOptions = [
   { key: 'dark', title: 'Nền tối', description: 'Tông tối tập trung, hợp dùng ban đêm.' },
@@ -26,7 +27,10 @@ export default function SettingsScreen() {
           return (
             <Pressable
               key={item.key}
-              onPress={() => setThemeName(item.key)}
+              onPress={() => {
+                blurActiveWebElement();
+                setThemeName(item.key);
+              }}
               style={({ pressed }) => [
                 styles.option,
                 active && styles.activeOption,

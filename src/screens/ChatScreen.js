@@ -1,17 +1,14 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { FlatList, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import mockMessages from '../data/mockMessages';
-import {
-  fetchMessagesWithUser,
-  sendMessage,
-  subscribeToMessages,
-} from '../services/messageService';
+import { fetchMessagesWithUser, sendMessage } from '../services/messageService';
 import { fetchProfileById } from '../services/profileService.js';
 import useUserStore from '../store/userStore';
 import colors from '../theme/colors';
 import spacing from '../theme/spacing';
 import { getVietnameseErrorMessage } from '../utils/errorMessages';
+import { formatLastActive } from '../utils/formatTime';
 import { loadCachedMessages, saveCachedMessages } from '../utils/messageCache';
 
 const reactions = ['👍', '❤️', '✨', '😂', '☕'];
@@ -45,6 +42,32 @@ function getMessageFingerprint(message) {
   return `${message?.senderId}-${message?.receiverId}-${message?.createdAt || ''}-${message?.text}`;
 }
 
+function getMessageTimeValue(message) {
+  const time = new Date(message?.createdAt || 0).getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function isMatchingPendingMessage(pendingMessage, savedMessage) {
+  if (!pendingMessage?.pending || !savedMessage) {
+    return false;
+  }
+
+  const sameConversation =
+    pendingMessage.senderId === savedMessage.senderId &&
+    pendingMessage.receiverId === savedMessage.receiverId;
+  if (!sameConversation || pendingMessage.text !== savedMessage.text) {
+    return false;
+  }
+
+  const pendingTime = getMessageTimeValue(pendingMessage);
+  const savedTime = getMessageTimeValue(savedMessage);
+  if (!pendingTime || !savedTime) {
+    return true;
+  }
+
+  return Math.abs(savedTime - pendingTime) < 60 * 1000;
+}
+
 function addMessageOnce(items, message) {
   const nextMessage = { ...message, id: getMessageKey(message) };
   const nextKey = getMessageKey(nextMessage);
@@ -63,9 +86,36 @@ function addMessageOnce(items, message) {
   return [...items, nextMessage];
 }
 
+function reconcileSavedMessage(items, message) {
+  const nextMessage = { ...message, id: getMessageKey(message), pending: false };
+  const nextKey = getMessageKey(nextMessage);
+  const existingIndex = items.findIndex((item) => getMessageKey(item) === nextKey);
+
+  if (existingIndex >= 0) {
+    return items
+      .filter((item, index) => index === existingIndex || !isMatchingPendingMessage(item, nextMessage))
+      .map((item) => (getMessageKey(item) === nextKey ? { ...item, ...nextMessage } : item));
+  }
+
+  const pendingIndex = items.findIndex((item) => isMatchingPendingMessage(item, nextMessage));
+  if (pendingIndex >= 0) {
+    return items.reduce((nextItems, item, index) => {
+      if (index === pendingIndex) {
+        nextItems.push(nextMessage);
+      } else if (!isMatchingPendingMessage(item, nextMessage)) {
+        nextItems.push(item);
+      }
+
+      return nextItems;
+    }, []);
+  }
+
+  return addMessageOnce(items, nextMessage);
+}
+
 function replaceMessage(items, tempId, message) {
   const withoutTemp = items.filter((item) => String(item.id) !== String(tempId));
-  return addMessageOnce(withoutTemp, message);
+  return reconcileSavedMessage(withoutTemp, message);
 }
 
 function mergeMessages(oldMessages, newMessages) {
@@ -76,11 +126,29 @@ function mergeMessages(oldMessages, newMessages) {
     }
   });
 
-  return Array.from(messageMap.values());
+  return Array.from(messageMap.values()).sort((first, second) => {
+    const timeDiff = getMessageTimeValue(first) - getMessageTimeValue(second);
+    if (timeDiff !== 0) {
+      return timeDiff;
+    }
+
+    return getMessageKey(first).localeCompare(getMessageKey(second));
+  });
 }
 
 function normalizeCachedMessages(items) {
   return mergeMessages([], items || []);
+}
+
+function getNewestMessagesFirst(items) {
+  return [...items].sort((first, second) => {
+    const timeDiff = getMessageTimeValue(second) - getMessageTimeValue(first);
+    if (timeDiff !== 0) {
+      return timeDiff;
+    }
+
+    return getMessageKey(second).localeCompare(getMessageKey(first));
+  });
 }
 
 export default function ChatScreen({ route }) {
@@ -94,7 +162,7 @@ export default function ChatScreen({ route }) {
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const listRef = useRef(null);
+  const visibleMessages = useMemo(() => getNewestMessagesFirst(messages), [messages]);
 
   useEffect(() => {
     if (!isBackendReady || localUser || remoteUser || !route.params?.userId) {
@@ -115,12 +183,6 @@ export default function ChatScreen({ route }) {
     };
   }, [isBackendReady, localUser, remoteUser, route.params?.userId]);
 
-  function scrollToLatest(animated = true) {
-    requestAnimationFrame(() => {
-      listRef.current?.scrollToEnd({ animated });
-    });
-  }
-
   useEffect(() => {
     if (!isBackendReady || !user?.id || !currentUser?.id) {
       return undefined;
@@ -134,7 +196,6 @@ export default function ChatScreen({ route }) {
       );
       if (active && cachedMessages.length) {
         setMessages(cachedMessages);
-        scrollToLatest(false);
       }
 
       setLoading(!cachedMessages.length);
@@ -148,7 +209,6 @@ export default function ChatScreen({ route }) {
             saveCachedMessages(currentUser.id, user.id, nextMessages);
             return nextMessages;
           });
-          scrollToLatest(false);
         }
       } catch (err) {
         setError(getVietnameseErrorMessage(err.message));
@@ -158,25 +218,9 @@ export default function ChatScreen({ route }) {
     }
 
     loadMessages();
-    const unsubscribe = subscribeToMessages(user.id, currentUser.id, (row) => {
-      const belongsToChat =
-        (row.sender_id === currentUser.id && row.receiver_id === user.id) ||
-        (row.sender_id === user.id && row.receiver_id === currentUser.id);
-
-      if (belongsToChat) {
-        const newMessage = mapMessage(row);
-        setMessages((items) => {
-          const nextMessages = addMessageOnce(items, newMessage);
-          saveCachedMessages(currentUser.id, user.id, nextMessages);
-          return nextMessages;
-        });
-        scrollToLatest();
-      }
-    });
 
     return () => {
       active = false;
-      unsubscribe();
     };
   }, [currentUser?.id, isBackendReady, user?.id]);
 
@@ -199,7 +243,6 @@ export default function ChatScreen({ route }) {
           time: 'Bây giờ',
         })
       );
-      scrollToLatest();
       if (isTypedMessage) {
         setText('');
       }
@@ -225,7 +268,6 @@ export default function ChatScreen({ route }) {
     setSending(true);
     setError(null);
     setMessages((items) => addMessageOnce(items, optimisticMessage));
-    scrollToLatest();
     if (isTypedMessage) {
       setText('');
     }
@@ -238,7 +280,6 @@ export default function ChatScreen({ route }) {
         saveCachedMessages(currentUser.id, user.id, nextMessages);
         return nextMessages;
       });
-      scrollToLatest();
     } catch (err) {
       setError(getVietnameseErrorMessage(err.message));
       setMessages((items) => items.filter((item) => String(item.id) !== tempId));
@@ -283,13 +324,13 @@ export default function ChatScreen({ route }) {
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.name}>{user.name}</Text>
-        <Text style={styles.status}>{user.isOnline ? 'Đang online' : user.lastActive}</Text>
+        <Text style={styles.status}>{formatLastActive(user)}</Text>
       </View>
       {loading ? <Text style={styles.notice}>Đang tải tin nhắn...</Text> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
       <FlatList
-        ref={listRef}
-        data={messages}
+        data={visibleMessages}
+        inverted
         keyExtractor={(item, index) => String(item.id || `message-${index}`)}
         renderItem={({ item }) => {
           const isMine = item.senderId === 'me' || item.senderId === currentUser?.id;
@@ -301,7 +342,6 @@ export default function ChatScreen({ route }) {
           );
         }}
         contentContainerStyle={styles.messages}
-        onContentSizeChange={() => scrollToLatest(false)}
         showsVerticalScrollIndicator={false}
       />
       <View style={styles.reactions}>
@@ -323,6 +363,7 @@ export default function ChatScreen({ route }) {
             multiline
             blurOnSubmit={false}
             returnKeyType="send"
+            scrollEnabled
           />
         </View>
         <Pressable
@@ -334,7 +375,7 @@ export default function ChatScreen({ route }) {
             sending && styles.sendDisabled,
           ]}
         >
-          <Text style={styles.actionIcon}>{sending ? '...' : text.trim() ? SEND_ICON : LIKE_MESSAGE}</Text>
+          <Text style={styles.actionIcon}>{text.trim() ? SEND_ICON : LIKE_MESSAGE}</Text>
         </Pressable>
       </View>
     </SafeAreaView>
@@ -423,6 +464,7 @@ const styles = StyleSheet.create({
   },
   inputBox: {
     flex: 1,
+    height: 52,
     borderRadius: 18,
     backgroundColor: colors.card,
     borderWidth: 1,
@@ -431,15 +473,14 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
-    minHeight: 52,
-    maxHeight: 120,
+    height: 52,
     paddingTop: 15,
     paddingBottom: 15,
     color: colors.text,
     outlineStyle: 'none',
   },
   sendDisabled: {
-    opacity: 0.5,
+    opacity: 0.85,
   },
   actionButton: {
     width: 52,

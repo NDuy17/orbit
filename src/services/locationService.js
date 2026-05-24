@@ -31,15 +31,6 @@ function isMissingColumnError(error) {
   return message.includes('column') && message.includes('does not exist');
 }
 
-function isMissingConflictTargetError(error) {
-  const message = String(error?.message || '').toLowerCase();
-  return (
-    message.includes('no unique') ||
-    message.includes('exclusion constraint') ||
-    message.includes('on conflict')
-  );
-}
-
 function getBaseLocationPayload(payload) {
   const { public_latitude, public_longitude, is_approximate, ...basePayload } = payload;
 
@@ -54,7 +45,7 @@ function getBaseLocationPayload(payload) {
 async function updateOrInsertLocation(client, payload) {
   const { data: existingRows, error: selectError } = await client
     .from('locations')
-    .select('id')
+    .select('user_id')
     .eq('user_id', payload.user_id)
     .order('updated_at', { ascending: false })
     .limit(1);
@@ -63,21 +54,18 @@ async function updateOrInsertLocation(client, payload) {
     throw selectError;
   }
 
-  const existing = existingRows?.[0];
-
-  if (existing?.id) {
+  if (existingRows?.length) {
     const { data, error } = await client
       .from('locations')
       .update(payload)
-      .eq('id', existing.id)
-      .select()
-      .single();
+      .eq('user_id', payload.user_id)
+      .select();
 
     if (error) {
       throw error;
     }
 
-    return data;
+    return data?.[0] || null;
   }
 
   const { data, error } = await client.from('locations').insert(payload).select().single();
@@ -90,38 +78,32 @@ async function updateOrInsertLocation(client, payload) {
 }
 
 async function saveLocationPayload(client, payload) {
-  let nextPayload = payload;
-  let { data, error } = await client
-    .from('locations')
-    .upsert(nextPayload, { onConflict: 'user_id' })
-    .select()
-    .single();
-
-  if (!error) {
-    return data;
-  }
-
-  if (isMissingColumnError(error)) {
-    nextPayload = getBaseLocationPayload(payload);
-    const retry = await client
-      .from('locations')
-      .upsert(nextPayload, { onConflict: 'user_id' })
-      .select()
-      .single();
-
-    data = retry.data;
-    error = retry.error;
-
-    if (!error) {
-      return data;
+  try {
+    return await updateOrInsertLocation(client, payload);
+  } catch (error) {
+    if (isMissingColumnError(error)) {
+      return updateOrInsertLocation(client, getBaseLocationPayload(payload));
     }
-  }
 
-  if (isMissingConflictTargetError(error)) {
-    return updateOrInsertLocation(client, nextPayload);
+    throw error;
   }
+}
 
-  throw error;
+function getLatestRowsByUserId(rows) {
+  const getRowTime = (row) => {
+    const time = new Date(row?.updated_at || 0).getTime();
+    return Number.isNaN(time) ? 0 : time;
+  };
+  const latestRows = new Map();
+  [...(rows || [])]
+    .sort((first, second) => getRowTime(second) - getRowTime(first))
+    .forEach((row) => {
+      if (row?.user_id && !latestRows.has(row.user_id)) {
+        latestRows.set(row.user_id, row);
+      }
+    });
+
+  return Array.from(latestRows.values());
 }
 
 function normalizeLocationUser(row, friendIds) {
@@ -144,6 +126,7 @@ function normalizeLocationUser(row, friendIds) {
     status: textOr(profile.status, 'Đang dùng Orbit'),
     bio: textOr(profile.bio, ''),
     isOnline: Boolean(profile.is_online),
+    lastActiveAt: profile.last_active,
     lastActive: profile.is_online ? 'Đang online' : 'Offline',
     distance: row.distance || 0,
     isFriend,
@@ -261,7 +244,7 @@ export async function fetchVisibleNearbyUsers({ currentUserId, currentCoords, ra
     }, {});
   }
 
-  return (data || [])
+  return getLatestRowsByUserId(data)
     .filter((row) => row.latitude && row.longitude)
     .map((row) => {
       const isFriend = friendIds.includes(row.user_id);

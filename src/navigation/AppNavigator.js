@@ -20,6 +20,7 @@ import { subscribeToProfiles } from '../services/profileService.js';
 import useUserStore from '../store/userStore';
 import useThemeStore from '../store/themeStore';
 import colors from '../theme/colors';
+import { blurActiveWebElement } from '../utils/focus';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -67,6 +68,9 @@ function MainTabs() {
   return (
     <Tab.Navigator
       key={`tabs-${themeName}`}
+      screenListeners={{
+        tabPress: blurActiveWebElement,
+      }}
       screenOptions={{
         headerShown: false,
         tabBarStyle: styles.tabBar,
@@ -134,6 +138,7 @@ export default function AppNavigator() {
     }
 
     didResetNavigationRef.current = true;
+    blurActiveWebElement();
     navigationRef.current.reset({
       index: 0,
       routes: [{ name: routeName }],
@@ -257,9 +262,13 @@ export default function AppNavigator() {
       ref={navigationRef}
       theme={themedNavigation}
       onReady={() => resetToInitialRoute(initialRouteName)}
+      onStateChange={blurActiveWebElement}
     >
       <Stack.Navigator
         initialRouteName={initialRouteName}
+        screenListeners={{
+          transitionStart: blurActiveWebElement,
+        }}
         screenOptions={{
           headerStyle: { backgroundColor: colors.background },
           headerTintColor: colors.text,

@@ -28,6 +28,7 @@ export function mapProfileRow(row) {
     bio: textOr(row.bio, ''),
     status: textOr(row.status, ''),
     isOnline: Boolean(row.is_online),
+    lastActiveAt: row.last_active,
     lastActive: row.is_online ? 'Đang online' : `Hoạt động lúc ${formatLastActiveTime(row.last_active)}`,
     friends: row.friends_count || 0,
     met: row.encounters_count || 0,
@@ -100,8 +101,14 @@ export async function fetchProfileById(userId) {
   return profile;
 }
 
-function shuffleItems(items) {
-  return [...items].sort(() => Math.random() - 0.5);
+function mergeProfileRows(rows) {
+  const items = new Map();
+  rows.forEach((row) => {
+    if (row?.id && !items.has(row.id)) {
+      items.set(row.id, row);
+    }
+  });
+  return Array.from(items.values());
 }
 
 export async function searchProfilesByName(query, { limit = 8, offset = 0 } = {}) {
@@ -117,29 +124,47 @@ export async function searchProfilesByName(query, { limit = 8, offset = 0 } = {}
     return [];
   }
 
-  let { data, error } = await client
+  const prefixQuery = `${cleanQuery}%`;
+  const wordPrefixQuery = `% ${cleanQuery}%`;
+  const fetchLimit = offset + limit;
+  const currentUserId = authData.user?.id || '';
+  const rows = [];
+
+  const usernameQuery = await client
     .from('profiles')
     .select('*')
-    .or(`full_name.ilike.%${cleanQuery}%,username.ilike.%${cleanQuery}%`)
-    .neq('id', authData.user?.id || '')
-    .range(offset, offset + limit - 1);
+    .ilike('username', prefixQuery)
+    .neq('id', currentUserId)
+    .range(0, fetchLimit - 1);
 
-  if (error && String(error.message || '').toLowerCase().includes('full_name')) {
-    const retry = await client
+  if (usernameQuery.error) {
+    throw usernameQuery.error;
+  }
+
+  rows.push(...(usernameQuery.data || []));
+
+  const fullNameQueries = await Promise.all([
+    client
       .from('profiles')
       .select('*')
-      .ilike('username', `%${cleanQuery}%`)
-      .neq('id', authData.user?.id || '')
-      .range(offset, offset + limit - 1);
-    data = retry.data;
-    error = retry.error;
-  }
+      .ilike('full_name', prefixQuery)
+      .neq('id', currentUserId)
+      .range(0, fetchLimit - 1),
+    client
+      .from('profiles')
+      .select('*')
+      .ilike('full_name', wordPrefixQuery)
+      .neq('id', currentUserId)
+      .range(0, fetchLimit - 1),
+  ]);
 
-  if (error) {
-    throw error;
-  }
+  fullNameQueries.forEach((result) => {
+    if (!result.error) {
+      rows.push(...(result.data || []));
+    }
+  });
 
-  return shuffleItems((data || []).map(mapProfileRow).filter(Boolean));
+  return mergeProfileRows(rows).slice(offset, offset + limit).map(mapProfileRow).filter(Boolean);
 }
 
 export async function updateProfile(userId, updates) {

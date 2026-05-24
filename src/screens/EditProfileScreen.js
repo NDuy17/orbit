@@ -73,6 +73,9 @@ export default function EditProfileScreen({ navigation }) {
           <Text style={styles.title}>Chỉnh sửa hồ sơ</Text>
           <GlassCard style={styles.card}>
             <UserAvatar uri={avatarUrl || currentUser?.avatar} size={104} style={styles.avatar} />
+            <View style={styles.avatarActions}>
+              <OrbitButton title="Chọn & chỉnh sửa ảnh" variant="ghost" onPress={handlePickAvatar} />
+            </View>
 
             <Text style={styles.label}>Tên hiển thị</Text>
             <TextInput
@@ -82,11 +85,6 @@ export default function EditProfileScreen({ navigation }) {
               placeholderTextColor={colors.muted}
               style={styles.input}
             />
-
-            <View style={styles.avatarActions}>
-              <OrbitButton title="Chọn ảnh từ thư viện" variant="ghost" onPress={handlePickAvatar} />
-              <Text style={styles.avatarHint}>Ảnh sẽ được cắt vuông trước khi lưu hồ sơ.</Text>
-            </View>
 
             <Text style={styles.label}>Giới thiệu</Text>
             <TextInput
@@ -138,12 +136,6 @@ const styles = StyleSheet.create({
   },
   avatarActions: {
     alignItems: 'center',
-    gap: spacing.sm,
-  },
-  avatarHint: {
-    color: colors.muted,
-    fontSize: 13,
-    textAlign: 'center',
   },
   label: {
     color: colors.text,

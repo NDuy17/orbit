@@ -9,6 +9,7 @@ import useUserStore from '../store/userStore';
 import colors from '../theme/colors';
 import spacing from '../theme/spacing';
 import typography from '../theme/typography';
+import { formatLastActive } from '../utils/formatTime';
 
 export default function ProfileScreen({ navigation, route }) {
   const userId = route?.params?.userId;
@@ -132,7 +133,7 @@ export default function ProfileScreen({ navigation, route }) {
         <UserAvatar uri={profile?.avatar} size={112} style={styles.avatar} />
         <Text style={styles.name}>{profile?.name || 'Người dùng Orbit'}</Text>
         <Text style={styles.bio}>{profile?.bio || profile?.status || 'Đang dùng Orbit'}</Text>
-        <Text style={styles.status}>{profile?.isOnline ? 'Đang online' : profile?.lastActive}</Text>
+        <Text style={styles.status}>{formatLastActive(profile)}</Text>
         <View style={styles.stats}>
           <View style={styles.stat}>
             <Text style={styles.statNumber}>{profile?.friends || 0}</Text>

@@ -17,9 +17,12 @@ import useLocationStore from '../store/locationStore';
 import useUserStore from '../store/userStore';
 import colors from '../theme/colors';
 import spacing from '../theme/spacing';
+import { calculateCoordinateDistance } from '../utils/distance';
 import { getVietnameseErrorMessage } from '../utils/errorMessages';
 
 const emptyTrails = {};
+const locationSaveDistanceMeters = 10;
+const locationSaveIntervalMs = 15000;
 
 function toMapUser(user) {
   return {
@@ -79,6 +82,7 @@ export default function HomeMapScreen({ navigation }) {
     setLocationLoading,
   } = useLocationStore();
   const refreshTimer = useRef(null);
+  const lastLocationSaveRef = useRef({ coords: null, modeKey: null, savedAt: 0 });
   const latestLocation = useRef(currentLocation);
   const [locationReady, setLocationReady] = useState(false);
   const [routeTarget, setRouteTarget] = useState(null);
@@ -213,12 +217,31 @@ export default function HomeMapScreen({ navigation }) {
           return;
         }
 
-        await saveCurrentUserLocation({
-          userId: currentUser.id,
-          ghostMode,
-          approximateLocation,
-          coords: deviceLocation,
-        });
+        const now = Date.now();
+        const modeKey = `${ghostMode}:${approximateLocation}`;
+        const lastSave = lastLocationSaveRef.current;
+        const movedDistance = lastSave.coords
+          ? calculateCoordinateDistance(lastSave.coords, deviceLocation)
+          : Infinity;
+        const shouldSaveLocation =
+          lastSave.modeKey !== modeKey ||
+          now - lastSave.savedAt >= locationSaveIntervalMs ||
+          movedDistance >= locationSaveDistanceMeters;
+
+        if (shouldSaveLocation) {
+          await saveCurrentUserLocation({
+            userId: currentUser.id,
+            ghostMode,
+            approximateLocation,
+            coords: deviceLocation,
+          });
+
+          lastLocationSaveRef.current = {
+            coords: deviceLocation,
+            modeKey,
+            savedAt: now,
+          };
+        }
 
         const nearbyUsers = await fetchVisibleNearbyUsers({
           currentUserId: currentUser.id,

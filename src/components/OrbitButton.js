@@ -2,14 +2,20 @@ import React from 'react';
 import { Platform, Pressable, StyleSheet, Text } from 'react-native';
 import colors from '../theme/colors';
 import spacing from '../theme/spacing';
+import { blurActiveWebElement } from '../utils/focus';
 
 export default function OrbitButton({ title, onPress, variant = 'primary', style, disabled = false }) {
   const isGhost = variant === 'ghost';
 
+  function handlePress(event) {
+    blurActiveWebElement();
+    onPress?.(event);
+  }
+
   return (
     <Pressable
       disabled={disabled}
-      onPress={onPress}
+      onPress={handlePress}
       style={({ pressed }) => [
         styles.button,
         isGhost ? styles.ghostButton : styles.primaryButton,

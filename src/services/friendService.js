@@ -40,7 +40,7 @@ async function fetchLatestLocationsByUserIds(client, ids) {
 
   const { data, error } = await client
     .from('locations')
-    .select('user_id, latitude, longitude, public_latitude, public_longitude, updated_at')
+    .select('*')
     .in('user_id', uniqueIds)
     .eq('is_visible', true)
     .order('updated_at', { ascending: false });

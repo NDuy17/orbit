@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import colors from '../theme/colors';
 import spacing from '../theme/spacing';
 import { formatDistance } from '../utils/distance';
+import { formatLastActive } from '../utils/formatTime';
 import GlassCard from './GlassCard';
 import OrbitButton from './OrbitButton';
 import StatusBadge from './StatusBadge';
@@ -45,7 +46,7 @@ export default function UserBottomSheet({
               <Text style={styles.status}>{user.status}</Text>
               <View style={styles.metaRow}>
                 <Text style={styles.distance}>{formatDistance(user.distance)}</Text>
-                <StatusBadge isOnline={user.isOnline} label={user.isOnline ? 'Online' : 'Offline'} />
+                <StatusBadge isOnline={user.isOnline} label={formatLastActive(user)} />
               </View>
             </View>
           </View>

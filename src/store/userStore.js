@@ -111,6 +111,46 @@ function isMissingProfileError(error) {
   return message.includes('0 rows') || message.includes('no rows') || message.includes('pgrst116');
 }
 
+function normalizeSearchText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function matchesSearchPrefix(value, cleanQuery) {
+  const normalizedValue = normalizeSearchText(value);
+  const normalizedQuery = normalizeSearchText(cleanQuery);
+
+  if (!normalizedValue || !normalizedQuery) {
+    return false;
+  }
+
+  return normalizedValue
+    .split(/\s+/)
+    .filter(Boolean)
+    .some((word, index) => {
+      if (word.startsWith(normalizedQuery)) {
+        return true;
+      }
+
+      return index === 0 && normalizedValue.startsWith(normalizedQuery);
+    });
+}
+
+function searchLocalProfiles(state, cleanQuery) {
+  const currentUserId = state.currentUser?.id;
+
+  return mergeUniqueById([...state.friends, ...state.users])
+    .filter((user) => user?.id && user.id !== currentUserId)
+    .filter((user) =>
+      [user.name, user.full_name, user.username, user.status].some((value) =>
+        matchesSearchPrefix(value, cleanQuery)
+      )
+    )
+    .map((user) => withFriendshipStatus(user, state));
+}
+
 const useUserStore = create((set, get) => ({
   currentUser,
   users: hasSupabaseConfig ? [] : mockUsers.map((user) => ({ ...user, friendshipStatus: user.isFriend ? 'friends' : 'none' })),
@@ -159,6 +199,7 @@ const useUserStore = create((set, get) => ({
               bio: mappedProfile.bio,
               status: mappedProfile.status,
               isOnline: mappedProfile.isOnline,
+              lastActiveAt: mappedProfile.lastActiveAt,
               lastActive: mappedProfile.lastActive,
             }
           : item;
@@ -629,20 +670,33 @@ const useUserStore = create((set, get) => ({
       return [];
     }
 
+    const state = get();
+    const localMatches = searchLocalProfiles(state, cleanQuery);
+
     if (!hasSupabaseConfig) {
-      const lowered = cleanQuery.toLowerCase();
-      const state = get();
-      return mockUsers
-        .filter((user) => user.id !== state.currentUser.id && user.name.toLowerCase().includes(lowered))
-        .slice(offset, offset + limit)
-        .map((user) => withFriendshipStatus(user, state));
+      return localMatches.slice(offset, offset + limit);
+    }
+
+    const localSlice = localMatches.slice(offset, offset + limit);
+    const remaining = limit - localSlice.length;
+    if (remaining <= 0) {
+      return localSlice;
     }
 
     set({ backendLoading: true, error: null });
     try {
-      const profiles = await searchProfilesByName(cleanQuery, { limit, offset });
-      const state = get();
-      const results = profiles.map((profile) => withFriendshipStatus(profile, state));
+      const localIds = new Set(localMatches.map((profile) => profile.id));
+      const remoteOffset = Math.max(0, offset - localMatches.length);
+      const profiles = await searchProfilesByName(cleanQuery, {
+        limit: remaining + localMatches.length,
+        offset: remoteOffset,
+      });
+      const latestState = get();
+      const remoteResults = profiles
+        .map((profile) => withFriendshipStatus(profile, latestState))
+        .filter((profile) => profile?.id && !localIds.has(profile.id))
+        .slice(0, remaining);
+      const results = [...localSlice, ...remoteResults];
       set({ backendLoading: false, error: null });
       return results;
     } catch (error) {

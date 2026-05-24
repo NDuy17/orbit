@@ -3,6 +3,8 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import colors from '../theme/colors';
 import spacing from '../theme/spacing';
 import { formatDistance } from '../utils/distance';
+import { blurActiveWebElement } from '../utils/focus';
+import { formatLastActive } from '../utils/formatTime';
 import OrbitButton from './OrbitButton';
 import StatusBadge from './StatusBadge';
 import UserAvatar from './UserAvatar';
@@ -41,9 +43,14 @@ export default function UserListItem({
     }
   }
 
+  function handlePress(event) {
+    blurActiveWebElement();
+    onPress?.(event);
+  }
+
   return (
     <Pressable
-      onPress={onPress}
+      onPress={handlePress}
       disabled={!onPress}
       style={({ pressed }) => [styles.item, pressed && styles.pressed]}
     >
@@ -56,7 +63,7 @@ export default function UserListItem({
         <Text style={styles.status} numberOfLines={1}>
           {user.status}
         </Text>
-        <StatusBadge isOnline={user.isOnline} label={user.isOnline ? 'Đang online' : user.lastActive} />
+        <StatusBadge isOnline={user.isOnline} label={formatLastActive(user)} />
       </View>
       <View style={styles.actions}>
         {showFriendButton ? (
