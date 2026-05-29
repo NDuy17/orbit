@@ -52,8 +52,8 @@ async function fetchLatestLocationsByUserIds(client, ids) {
   return (data || []).reduce((items, location) => {
     if (!items[location.user_id]) {
       items[location.user_id] = {
-        latitude: location.latitude || location.public_latitude,
-        longitude: location.longitude || location.public_longitude,
+        latitude: location.latitude ?? location.public_latitude,
+        longitude: location.longitude ?? location.public_longitude,
       };
     }
     return items;

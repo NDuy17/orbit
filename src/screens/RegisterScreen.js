@@ -53,13 +53,21 @@ export default function RegisterScreen({ navigation }) {
       return;
     }
 
-    const success = await register(cleanEmail, password, {
+    const result = await register(cleanEmail, password, {
       name: name.trim(),
       bio: 'Đang khám phá Orbit.',
       status: 'Mới tham gia Orbit',
     });
 
-    if (success) {
+    if (result === 'needs_confirmation') {
+      navigation.replace('Login', {
+        email: cleanEmail,
+        notice: 'Tài khoản đã tạo. Hãy xác nhận email nếu Supabase yêu cầu, rồi đăng nhập.',
+      });
+      return;
+    }
+
+    if (result) {
       navigation.replace('MainTabs');
     }
   }

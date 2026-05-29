@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -37,7 +37,7 @@ function sortFriendsFirst(items) {
   });
 }
 
-export default function FriendsScreen({ navigation }) {
+export default function FriendsScreen({ navigation, route }) {
   const {
     users,
     friends,
@@ -62,6 +62,7 @@ export default function FriendsScreen({ navigation }) {
   const [searching, setSearching] = useState(false);
   const [searchOffset, setSearchOffset] = useState(0);
   const [hasMoreSearchResults, setHasMoreSearchResults] = useState(false);
+  const listRef = useRef(null);
   const lastFetchRef = useRef(0);
   const searchTimerRef = useRef(null);
 
@@ -96,6 +97,37 @@ export default function FriendsScreen({ navigation }) {
       return undefined;
     }, [isBackendReady, refreshFriendData])
   );
+
+  useEffect(() => {
+    if (!route?.params?.showRequests) {
+      return;
+    }
+
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current);
+    }
+
+    setActiveTab('friends');
+    setSearchOpen(false);
+    setQuery('');
+    setSearchResults([]);
+    setSearching(false);
+    setSearchOffset(0);
+    setHasMoreSearchResults(false);
+
+    if (isBackendReady) {
+      refreshFriendData();
+    }
+
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToOffset?.({ offset: 0, animated: true });
+    });
+  }, [
+    isBackendReady,
+    refreshFriendData,
+    route?.params?.requestFocusNonce,
+    route?.params?.showRequests,
+  ]);
 
   function handleSearchText(nextQuery) {
     setQuery(nextQuery);
@@ -319,6 +351,7 @@ export default function FriendsScreen({ navigation }) {
   return (
     <SafeAreaView style={styles.container}>
       <FlatList
+        ref={listRef}
         data={activeData}
         keyExtractor={(item, index) => String(item.id || `${isSearchMode ? 'search' : activeTab}-${index}`)}
         ListHeaderComponent={renderHeader}

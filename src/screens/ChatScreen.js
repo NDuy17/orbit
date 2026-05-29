@@ -2,8 +2,13 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { FlatList, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import mockMessages from '../data/mockMessages';
-import { fetchMessagesWithUser, sendMessage } from '../services/messageService';
+import {
+  fetchMessagesWithUser,
+  sendMessage,
+  subscribeToMessages,
+} from '../services/messageService';
 import { fetchProfileById } from '../services/profileService.js';
+import useMessageStore from '../store/messageStore';
 import useUserStore from '../store/userStore';
 import colors from '../theme/colors';
 import spacing from '../theme/spacing';
@@ -153,6 +158,9 @@ function getNewestMessagesFirst(items) {
 
 export default function ChatScreen({ route }) {
   const { users, friends, currentUser, isBackendReady } = useUserStore();
+  const markConversationSeen = useMessageStore(
+    (state) => state.markConversationSeen
+  );
   const allPeople = useMemo(() => [...users, ...friends], [users, friends]);
   const localUser = allPeople.find((item) => item.id === route.params?.userId);
   const [remoteUser, setRemoteUser] = useState(route.params?.user || null);
@@ -163,6 +171,27 @@ export default function ChatScreen({ route }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const visibleMessages = useMemo(() => getNewestMessagesFirst(messages), [messages]);
+
+  useEffect(() => {
+    if (isBackendReady && user?.id) {
+      markConversationSeen(user.id, null, currentUser?.id);
+    }
+  }, [currentUser?.id, isBackendReady, markConversationSeen, user?.id]);
+
+  useEffect(() => {
+    if (!isBackendReady || !user?.id || !messages.length) {
+      return;
+    }
+
+    const latestTimestamp = Math.max(...messages.map(getMessageTimeValue));
+    if (latestTimestamp) {
+      markConversationSeen(
+        user.id,
+        new Date(latestTimestamp).toISOString(),
+        currentUser?.id
+      );
+    }
+  }, [currentUser?.id, isBackendReady, markConversationSeen, messages, user?.id]);
 
   useEffect(() => {
     if (!isBackendReady || localUser || remoteUser || !route.params?.userId) {
@@ -223,6 +252,33 @@ export default function ChatScreen({ route }) {
       active = false;
     };
   }, [currentUser?.id, isBackendReady, user?.id]);
+
+  useEffect(() => {
+    if (!isBackendReady || !user?.id || !currentUser?.id) {
+      return undefined;
+    }
+
+    return subscribeToMessages(user.id, currentUser.id, (row) => {
+      const isCurrentConversation =
+        (row?.sender_id === currentUser.id && row?.receiver_id === user.id) ||
+        (row?.sender_id === user.id && row?.receiver_id === currentUser.id);
+
+      if (!isCurrentConversation) {
+        return;
+      }
+
+      const newMessage = mapMessage(row);
+      setMessages((items) => {
+        const nextMessages = reconcileSavedMessage(items, newMessage);
+        saveCachedMessages(currentUser.id, user.id, nextMessages);
+        return nextMessages;
+      });
+
+      if (row.sender_id === user.id) {
+        markConversationSeen(user.id, row.created_at, currentUser.id);
+      }
+    });
+  }, [currentUser?.id, isBackendReady, markConversationSeen, user?.id]);
 
   async function handleSend(messageText) {
     const cleanText = (messageText || text).trim();

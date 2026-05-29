@@ -8,15 +8,17 @@ import colors from '../theme/colors';
 import spacing from '../theme/spacing';
 import typography from '../theme/typography';
 
-export default function LoginScreen({ navigation }) {
+export default function LoginScreen({ navigation, route }) {
   const { login, authLoading, error, clearError } = useUserStore();
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(route?.params?.email || '');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [localError, setLocalError] = useState('');
+  const [notice, setNotice] = useState(route?.params?.notice || '');
 
   function clearMessages() {
     setLocalError('');
+    setNotice('');
     clearError();
   }
 
@@ -76,6 +78,7 @@ export default function LoginScreen({ navigation }) {
             <Text style={styles.showText}>{showPassword ? 'Ẩn' : 'Hiện'}</Text>
           </Pressable>
         </View>
+        {notice ? <Text style={styles.notice}>{notice}</Text> : null}
         {localError || error ? <Text style={styles.error}>{localError || error}</Text> : null}
         <OrbitButton
           title={authLoading ? 'Đang vào...' : 'Đăng nhập'}
@@ -147,5 +150,10 @@ const styles = StyleSheet.create({
   error: {
     color: colors.danger,
     fontSize: 13,
+  },
+  notice: {
+    color: colors.online,
+    fontSize: 13,
+    fontWeight: '700',
   },
 });

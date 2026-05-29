@@ -4,11 +4,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import AutoHideNotice from '../components/AutoHideNotice';
 import GlassCard from '../components/GlassCard';
 import LeafletMap from '../components/LeafletMap';
+import MapUserGroupSheet from '../components/MapUserGroupSheet';
 import UserBottomSheet from '../components/UserBottomSheet';
 import { clusterLocation, userTrails } from '../data/mockLocations';
 import {
   fetchVisibleNearbyUsers,
   getFastDeviceLocation,
+  hideCurrentUserLocation,
   saveCurrentUserLocation,
   subscribeToLocations,
   watchDeviceLocation,
@@ -54,7 +56,6 @@ function areMapUsersEqual(nextUsers, currentUsers) {
 
 export default function HomeMapScreen({ navigation }) {
   const {
-    currentUser,
     users,
     friends,
     selectedUser,
@@ -68,7 +69,10 @@ export default function HomeMapScreen({ navigation }) {
     loadFriends,
     requestFriend,
     isBackendReady,
+    isAdminAccount,
+    loadAdminStatus,
     error,
+    session,
   } = useUserStore();
   const {
     currentLocation,
@@ -90,8 +94,18 @@ export default function HomeMapScreen({ navigation }) {
   const [isMapAwayFromUser, setIsMapAwayFromUser] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
   const [mapUsers, setMapUsers] = useState([]);
+  const [selectedMapGroupUsers, setSelectedMapGroupUsers] = useState([]);
   const onlineFriendCount = friends.filter((friend) => friend.isOnline).length;
-  const privacyLabel = ghostMode ? 'Ẩn vị trí' : approximateLocation ? 'Vị trí gần đúng' : 'Vị trí chính xác';
+  const privacyLabel = isAdminAccount
+    ? 'Chế độ admin'
+    : ghostMode
+      ? 'Ẩn vị trí'
+      : approximateLocation
+        ? 'Vị trí gần đúng'
+        : 'Vị trí chính xác';
+  const mapCurrentLocation = isAdminAccount ? null : currentLocation;
+  const mapLocationReady = isAdminAccount ? false : locationReady;
+  const backendUserId = isBackendReady ? session?.user?.id : null;
   const friendIdsKey = useMemo(
     () => friends.map((friend) => friend.id).filter(Boolean).sort().join('|'),
     [friends]
@@ -108,14 +122,49 @@ export default function HomeMapScreen({ navigation }) {
   const handleSelectUserFromMap = useCallback(
     (mapUser) => {
       const fullUser = users.find((item) => item.id === mapUser?.id);
+      setSelectedMapGroupUsers([]);
       setSelectedUser(fullUser || mapUser);
     },
     [setSelectedUser, users]
   );
 
+  const handleSelectUserGroupFromMap = useCallback(
+    (groupUsers) => {
+      const fullGroupUsers = groupUsers
+        .map((mapUser) => users.find((item) => item.id === mapUser?.id) || mapUser)
+        .filter(Boolean);
+
+      if (fullGroupUsers.length === 1) {
+        setSelectedMapGroupUsers([]);
+        setSelectedUser(fullGroupUsers[0]);
+        return;
+      }
+
+      clearSelectedUser();
+      setSelectedMapGroupUsers(fullGroupUsers);
+    },
+    [clearSelectedUser, setSelectedUser, users]
+  );
+
+  const handleSelectUserFromGroup = useCallback(
+    (user) => {
+      setSelectedMapGroupUsers([]);
+      setSelectedUser(user);
+    },
+    [setSelectedUser]
+  );
+
   useEffect(() => {
     let active = true;
     let stopWatching = null;
+
+    if (isAdminAccount) {
+      latestLocation.current = null;
+      setLocationReady(false);
+      setLocationLoading(false);
+      setLocationError(null);
+      return undefined;
+    }
 
     function applyDeviceLocation(location) {
       latestLocation.current = location;
@@ -168,13 +217,28 @@ export default function HomeMapScreen({ navigation }) {
       active = false;
       stopWatching?.();
     };
-  }, [retryKey, setCurrentLocation, setLocationError, setLocationLoading]);
+  }, [isAdminAccount, retryKey, setCurrentLocation, setLocationError, setLocationLoading]);
 
   useEffect(() => {
-    if (isBackendReady) {
+    if (backendUserId) {
+      loadAdminStatus();
+    }
+  }, [backendUserId, loadAdminStatus]);
+
+  useEffect(() => {
+    if (backendUserId) {
       loadFriends();
     }
-  }, [isBackendReady, loadFriends]);
+  }, [backendUserId, loadFriends]);
+
+  useEffect(() => {
+    if (!backendUserId || !isAdminAccount) {
+      return;
+    }
+
+    setUsers([]);
+    hideCurrentUserLocation(backendUserId).catch(() => {});
+  }, [backendUserId, isAdminAccount, setUsers]);
 
   useEffect(() => {
     if (!actionNotice) {
@@ -204,7 +268,7 @@ export default function HomeMapScreen({ navigation }) {
   }, [routeTarget, users]);
 
   useEffect(() => {
-    if (!isBackendReady || !currentUser?.id || !locationReady) {
+    if (!backendUserId || !locationReady || isAdminAccount) {
       return undefined;
     }
 
@@ -230,7 +294,7 @@ export default function HomeMapScreen({ navigation }) {
 
         if (shouldSaveLocation) {
           await saveCurrentUserLocation({
-            userId: currentUser.id,
+            userId: backendUserId,
             ghostMode,
             approximateLocation,
             coords: deviceLocation,
@@ -244,7 +308,7 @@ export default function HomeMapScreen({ navigation }) {
         }
 
         const nearbyUsers = await fetchVisibleNearbyUsers({
-          currentUserId: currentUser.id,
+          currentUserId: backendUserId,
           currentCoords: deviceLocation,
           radius,
           friendIds,
@@ -265,11 +329,12 @@ export default function HomeMapScreen({ navigation }) {
     };
   }, [
     approximateLocation,
+    backendUserId,
     currentLocation,
-    currentUser?.id,
     friendIds,
     friendIdsKey,
     ghostMode,
+    isAdminAccount,
     isBackendReady,
     locationReady,
     radius,
@@ -278,7 +343,7 @@ export default function HomeMapScreen({ navigation }) {
   ]);
 
   useEffect(() => {
-    if (!isBackendReady || !currentUser?.id || !locationReady) {
+    if (!backendUserId || !locationReady || isAdminAccount) {
       return undefined;
     }
 
@@ -287,7 +352,7 @@ export default function HomeMapScreen({ navigation }) {
     async function refreshNearbyUsers() {
       try {
         const nearbyUsers = await fetchVisibleNearbyUsers({
-          currentUserId: currentUser.id,
+          currentUserId: backendUserId,
           currentCoords: latestLocation.current,
           radius,
           friendIds,
@@ -303,7 +368,7 @@ export default function HomeMapScreen({ navigation }) {
 
     const unsubscribe = subscribeToLocations((payload) => {
       const changedUserId = payload?.new?.user_id || payload?.old?.user_id;
-      if (changedUserId === currentUser.id) {
+      if (changedUserId === backendUserId) {
         return;
       }
 
@@ -322,9 +387,10 @@ export default function HomeMapScreen({ navigation }) {
       unsubscribe();
     };
   }, [
-    currentUser?.id,
+    backendUserId,
     friendIds,
     friendIdsKey,
+    isAdminAccount,
     isBackendReady,
     locationReady,
     radius,
@@ -362,14 +428,15 @@ export default function HomeMapScreen({ navigation }) {
     <View style={styles.container}>
       <LeafletMap
         users={mapUsers}
-        currentLocation={currentLocation}
+        currentLocation={mapCurrentLocation}
         trails={isBackendReady ? emptyTrails : userTrails}
         clusterLocation={isBackendReady ? null : clusterLocation}
         routeTarget={routeTarget}
         recenterKey={recenterKey}
-        locationReady={locationReady}
+        locationReady={mapLocationReady}
         onAwayFromUserChange={setIsMapAwayFromUser}
         onSelectUser={handleSelectUserFromMap}
+        onSelectUserGroup={handleSelectUserGroupFromMap}
       />
 
       <SafeAreaView style={styles.floating}>
@@ -384,7 +451,9 @@ export default function HomeMapScreen({ navigation }) {
             <Text style={styles.cardText}>
               {locationLoading
                 ? 'Đang lấy vị trí của bạn...'
-                : locationReady
+                : isAdminAccount
+                  ? 'Tài khoản admin không chia sẻ vị trí trên bản đồ người dùng.'
+                  : locationReady
                   ? 'Bản đồ đã sẵn sàng'
                   : 'Đang chuẩn bị bản đồ...'}
             </Text>
@@ -412,7 +481,7 @@ export default function HomeMapScreen({ navigation }) {
         ) : null}
       </SafeAreaView>
 
-      {isMapAwayFromUser ? (
+      {isMapAwayFromUser && !isAdminAccount ? (
         <SafeAreaView pointerEvents="box-none" style={styles.recenterFloating}>
           <Pressable style={styles.recenterButton} onPress={handleRecenterOnUser}>
             <Text style={styles.recenterText}>Về vị trí của tôi</Text>
@@ -420,10 +489,26 @@ export default function HomeMapScreen({ navigation }) {
         </SafeAreaView>
       ) : null}
 
+      <MapUserGroupSheet
+        users={selectedMapGroupUsers}
+        onClose={() => setSelectedMapGroupUsers([])}
+        onSelectUser={handleSelectUserFromGroup}
+      />
+
       <UserBottomSheet
         user={selectedUser}
-        onClose={clearSelectedUser}
+        onClose={() => {
+          setSelectedMapGroupUsers([]);
+          clearSelectedUser();
+        }}
         onProfile={() => navigation.navigate('UserProfile', { userId: selectedUser?.id })}
+        onReport={() =>
+          selectedUser &&
+          navigation.navigate('ReportUser', {
+            userId: selectedUser.id,
+            userName: selectedUser.name,
+          })
+        }
         onFriendAction={handleFriendAction}
         onDirections={() =>
           selectedUser &&

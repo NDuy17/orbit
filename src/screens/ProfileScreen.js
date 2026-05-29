@@ -155,6 +155,17 @@ export default function ProfileScreen({ navigation, route }) {
         ) : (
           <View style={styles.actionRow}>
             <OrbitButton title="Nhắn tin" onPress={() => navigation.navigate('Chat', { userId })} style={styles.actionButton} />
+            <OrbitButton
+              title="Báo cáo"
+              variant="ghost"
+              onPress={() =>
+                navigation.navigate('ReportUser', {
+                  userId,
+                  userName: profile?.name,
+                })
+              }
+              style={styles.actionButton}
+            />
             {friendshipStatus === 'friends' ? (
               <OrbitButton
                 title={actionLoading ? 'Đang xóa...' : 'Xóa bạn bè'}

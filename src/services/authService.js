@@ -21,7 +21,9 @@ export async function registerWithEmail(email, password, profile) {
 
   if (data.user) {
     try {
-      await createProfile(data.user.id, profile);
+      await createProfile(data.user.id, profile, {
+        isOnline: Boolean(data.session),
+      });
     } catch (profileError) {
       if (data.session) {
         throw profileError;
@@ -34,7 +36,10 @@ export async function registerWithEmail(email, password, profile) {
 
 export async function loginWithEmail(email, password) {
   const client = requireSupabase();
-  const { data, error } = await client.auth.signInWithPassword({ email, password });
+  const { data, error } = await client.auth.signInWithPassword({
+    email,
+    password,
+  });
 
   if (error) {
     throw error;
@@ -71,7 +76,9 @@ export function listenToAuthChanges(callback) {
     return () => {};
   }
 
-  const { data } = supabase.auth.onAuthStateChange((event, session) => callback(event, session));
+  const { data } = supabase.auth.onAuthStateChange((event, session) =>
+    callback(event, session)
+  );
 
   return () => data.subscription.unsubscribe();
 }

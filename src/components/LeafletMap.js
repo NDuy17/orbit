@@ -120,6 +120,32 @@ export function buildLeafletHtml({
         border: 2px solid #22D3EE;
         box-shadow: 0 0 18px rgba(34, 211, 238, 0.55);
       }
+      .user-group-marker {
+        position: relative;
+        width: 58px;
+        height: 58px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #F8FAFC;
+        font-size: 17px;
+        font-weight: 900;
+        background: linear-gradient(135deg, #7C3AED, #0891B2);
+        border: 2px solid #F8FAFC;
+        box-shadow: 0 0 0 8px rgba(34, 211, 238, 0.18), 0 14px 32px rgba(8, 13, 31, 0.32);
+      }
+      .user-group-marker::after {
+        content: "";
+        position: absolute;
+        right: 5px;
+        bottom: 6px;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #22C55E;
+        border: 2px solid #050816;
+      }
       .meet-point {
         width: 22px;
         height: 22px;
@@ -141,6 +167,7 @@ export function buildLeafletHtml({
       let currentMarker = null;
       let currentCircle = null;
       let clusterMarker = null;
+      let latestUsers = initialData.users || [];
       let lastRecenterKey = initialData.recenterKey || 0;
       let hasCenteredOnReadyLocation = Boolean(initialData.locationReady);
       let latestCurrentLocation = hasLocation(initialData.currentLocation) ? initialData.currentLocation : null;
@@ -172,6 +199,10 @@ export function buildLeafletHtml({
 
       function getIconKey(user) {
         return [user.avatar || '', user.name || '', user.isOnline ? '1' : '0'].join('|');
+      }
+
+      function getGroupKey(users) {
+        return users.map((user) => String(user.id)).sort().join('|');
       }
 
       function animateLatLng(layer, nextLatLng, duration) {
@@ -305,35 +336,101 @@ export function buildLeafletHtml({
         });
       }
 
-      function drawUsers(nextUsers) {
-        const nextIds = new Set();
+      function buildUserGroupIcon(group) {
+        return L.divIcon({
+          html: '<div class="user-group-marker">' + escapeValue(group.users.length) + '</div>',
+          className: '',
+          iconSize: [58, 58],
+          iconAnchor: [29, 29]
+        });
+      }
 
-        (nextUsers || []).forEach((user) => {
+      function getGroupLocation(group) {
+        const total = group.users.reduce((sum, user) => ({
+          latitude: sum.latitude + Number(user.location.latitude),
+          longitude: sum.longitude + Number(user.location.longitude)
+        }), { latitude: 0, longitude: 0 });
+
+        return {
+          latitude: total.latitude / group.users.length,
+          longitude: total.longitude / group.users.length
+        };
+      }
+
+      function groupCloseUsers(users) {
+        const threshold = 46;
+        const groups = [];
+
+        (users || []).forEach((user) => {
           if (!hasLocation(user.location)) {
             return;
           }
 
-          nextIds.add(String(user.id));
-          const markerKey = String(user.id);
-          const latLng = getLatLng(user.location);
+          const point = map.latLngToLayerPoint(getLatLng(user.location));
+          let targetGroup = null;
+
+          for (const group of groups) {
+            if (point.distanceTo(group.point) <= threshold) {
+              targetGroup = group;
+              break;
+            }
+          }
+
+          if (!targetGroup) {
+            groups.push({
+              point,
+              users: [user]
+            });
+            return;
+          }
+
+          targetGroup.users.push(user);
+          targetGroup.point = L.point(
+            (targetGroup.point.x * (targetGroup.users.length - 1) + point.x) / targetGroup.users.length,
+            (targetGroup.point.y * (targetGroup.users.length - 1) + point.y) / targetGroup.users.length
+          );
+        });
+
+        return groups;
+      }
+
+      function drawUsers(nextUsers) {
+        latestUsers = nextUsers || [];
+        const nextIds = new Set();
+
+        groupCloseUsers(latestUsers).forEach((group) => {
+          const isGroup = group.users.length > 1;
+          const user = group.users[0];
+          const markerKey = isGroup ? 'group:' + getGroupKey(group.users) : 'user:' + String(user.id);
+          const location = isGroup ? getGroupLocation(group) : user.location;
+          const latLng = getLatLng(location);
           const existingMarker = userMarkers[markerKey];
+          const nextIconKey = isGroup
+            ? 'group|' + group.users.length + '|' + getGroupKey(group.users)
+            : getIconKey(user);
+
+          nextIds.add(markerKey);
 
           if (existingMarker) {
             animateLatLng(existingMarker, latLng, 900);
-            const nextIconKey = getIconKey(user);
             if (existingMarker._orbitIconKey !== nextIconKey) {
-              existingMarker.setIcon(buildUserIcon(user));
+              existingMarker.setIcon(isGroup ? buildUserGroupIcon(group) : buildUserIcon(user));
               existingMarker._orbitIconKey = nextIconKey;
             }
             return;
           }
 
           const marker = L.marker(latLng, {
-            icon: buildUserIcon(user)
+            icon: isGroup ? buildUserGroupIcon(group) : buildUserIcon(user)
           }).addTo(map);
-          marker._orbitIconKey = getIconKey(user);
+          marker._orbitIconKey = nextIconKey;
 
           marker.on('click', () => {
+            if (isGroup) {
+              postToApp({ type: 'selectUserGroup', userIds: group.users.map((item) => item.id) });
+              return;
+            }
+
             postToApp({ type: 'selectUser', userId: user.id });
           });
 
@@ -488,6 +585,9 @@ export function buildLeafletHtml({
           userMovedMapManually = true;
         }
       });
+      map.on('zoomend', function() {
+        drawUsers(latestUsers);
+      });
       map.on('moveend', updateAwayFromCurrent);
     </script>
   </body>
@@ -504,6 +604,7 @@ export default function LeafletMap({
   locationReady = false,
   onAwayFromUserChange,
   onSelectUser,
+  onSelectUserGroup,
 }) {
   const webViewRef = useRef(null);
   const iframeRef = useRef(null);
@@ -563,6 +664,10 @@ export default function LeafletMap({
         if (message.type === 'selectUser') {
           const user = users.find((item) => item.id === message.userId);
           onSelectUser(user);
+        } else if (message.type === 'selectUserGroup') {
+          const userIdSet = new Set(message.userIds || []);
+          const groupUsers = users.filter((item) => userIdSet.has(item.id));
+          onSelectUserGroup?.(groupUsers);
         } else if (message.type === 'awayFromUserChanged') {
           onAwayFromUserChange?.(Boolean(message.isAwayFromUser));
         }
@@ -573,7 +678,7 @@ export default function LeafletMap({
 
     window.addEventListener('message', handleWebMessage);
     return () => window.removeEventListener('message', handleWebMessage);
-  }, [onAwayFromUserChange, onSelectUser, users]);
+  }, [onAwayFromUserChange, onSelectUser, onSelectUserGroup, users]);
 
   if (Platform.OS === 'web') {
     return React.createElement('iframe', {
@@ -597,6 +702,10 @@ export default function LeafletMap({
       if (message.type === 'selectUser') {
         const user = users.find((item) => item.id === message.userId);
         onSelectUser(user);
+      } else if (message.type === 'selectUserGroup') {
+        const userIdSet = new Set(message.userIds || []);
+        const groupUsers = users.filter((item) => userIdSet.has(item.id));
+        onSelectUserGroup?.(groupUsers);
       } else if (message.type === 'awayFromUserChanged') {
         onAwayFromUserChange?.(Boolean(message.isAwayFromUser));
       }

@@ -1,12 +1,58 @@
 ﻿import * as Location from 'expo-location';
 import DEFAULT_AVATAR_URL from '../constants/defaultAvatar';
-import { currentLocation } from '../data/mockLocations';
 import { calculateCoordinateDistance } from '../utils/distance';
+import { isRecentlyOnline } from '../utils/presence';
 import { textOr } from '../utils/text';
 import { requireSupabase, supabase } from './supabase';
 
+const METERS_PER_DEGREE_LATITUDE = 111320;
+const PUBLIC_LOCATION_PADDING_METERS = 150;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isUuid(value) {
+  return UUID_PATTERN.test(String(value || ''));
+}
+
 function roundCoordinate(value) {
   return Math.round(value * 1000) / 1000;
+}
+
+function hasCoordinatePair(value) {
+  return value?.latitude != null && value?.longitude != null;
+}
+
+function clampCoordinate(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getCoordinateBounds(coords, radiusMeters) {
+  const latitude = Number(coords?.latitude);
+  const longitude = Number(coords?.longitude);
+  const radius = Number(radiusMeters);
+
+  if (
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude) ||
+    !Number.isFinite(radius) ||
+    radius <= 0
+  ) {
+    return null;
+  }
+
+  const paddedRadius = radius + PUBLIC_LOCATION_PADDING_METERS;
+  const latitudeDelta = paddedRadius / METERS_PER_DEGREE_LATITUDE;
+  const latitudeRadians = (latitude * Math.PI) / 180;
+  const longitudeScale = Math.max(Math.abs(Math.cos(latitudeRadians)), 0.01);
+  const longitudeDelta =
+    paddedRadius / (METERS_PER_DEGREE_LATITUDE * longitudeScale);
+
+  return {
+    minLatitude: clampCoordinate(latitude - latitudeDelta, -90, 90),
+    maxLatitude: clampCoordinate(latitude + latitudeDelta, -90, 90),
+    minLongitude: clampCoordinate(longitude - longitudeDelta, -180, 180),
+    maxLongitude: clampCoordinate(longitude + longitudeDelta, -180, 180),
+  };
 }
 
 function mapLocationCoords(location) {
@@ -32,9 +78,14 @@ function isMissingColumnError(error) {
 }
 
 function getBaseLocationPayload(payload) {
-  const { public_latitude, public_longitude, is_approximate, ...basePayload } = payload;
+  const { public_latitude, public_longitude, is_approximate, ...basePayload } =
+    payload;
 
-  if (is_approximate && public_latitude !== undefined && public_longitude !== undefined) {
+  if (
+    is_approximate &&
+    public_latitude !== undefined &&
+    public_longitude !== undefined
+  ) {
     basePayload.latitude = public_latitude;
     basePayload.longitude = public_longitude;
   }
@@ -68,7 +119,11 @@ async function updateOrInsertLocation(client, payload) {
     return data?.[0] || null;
   }
 
-  const { data, error } = await client.from('locations').insert(payload).select().single();
+  const { data, error } = await client
+    .from('locations')
+    .insert(payload)
+    .select()
+    .single();
 
   if (error) {
     throw error;
@@ -109,25 +164,30 @@ function getLatestRowsByUserId(rows) {
 function normalizeLocationUser(row, friendIds) {
   const profile = row.profile || {};
   const isFriend = friendIds.includes(row.user_id);
-  const exactLocation = row.location || profile.location || {
-    latitude: row.latitude,
-    longitude: row.longitude,
-  };
+  const exactLocation = row.location ||
+    profile.location || {
+      latitude: row.latitude,
+      longitude: row.longitude,
+    };
   const publicLocation = {
-    latitude: row.public_latitude || exactLocation.latitude,
-    longitude: row.public_longitude || exactLocation.longitude,
+    latitude: row.public_latitude ?? exactLocation.latitude,
+    longitude: row.public_longitude ?? exactLocation.longitude,
   };
   const displayLocation = isFriend ? exactLocation : publicLocation;
+  const isOnline = isRecentlyOnline(profile.is_online, profile.last_active);
 
   return {
     id: row.user_id,
-    name: textOr(profile.full_name || profile.username || profile.name, 'Người dùng Orbit'),
+    name: textOr(
+      profile.full_name || profile.username || profile.name,
+      'Người dùng Orbit'
+    ),
     avatar: profile.avatar_url || DEFAULT_AVATAR_URL,
     status: textOr(profile.status, 'Đang dùng Orbit'),
     bio: textOr(profile.bio, ''),
-    isOnline: Boolean(profile.is_online),
+    isOnline,
     lastActiveAt: profile.last_active,
-    lastActive: profile.is_online ? 'Đang online' : 'Offline',
+    lastActive: isOnline ? 'Đang online' : 'Offline',
     distance: row.distance || 0,
     isFriend,
     friends: row.friends_count || profile.friends_count || profile.friends || 0,
@@ -182,8 +242,17 @@ export async function watchDeviceLocation(onLocation, onError) {
   return () => subscription.remove();
 }
 
-export async function saveCurrentUserLocation({ userId, ghostMode, approximateLocation, coords }) {
+export async function saveCurrentUserLocation({
+  userId,
+  ghostMode,
+  approximateLocation,
+  coords,
+}) {
   const client = requireSupabase();
+
+  if (!isUuid(userId)) {
+    return null;
+  }
 
   if (ghostMode) {
     await saveLocationPayload(client, {
@@ -195,8 +264,12 @@ export async function saveCurrentUserLocation({ userId, ghostMode, approximateLo
   }
 
   const location = coords || (await getDeviceLocation());
-  const publicLatitude = approximateLocation ? roundCoordinate(location.latitude) : location.latitude;
-  const publicLongitude = approximateLocation ? roundCoordinate(location.longitude) : location.longitude;
+  const publicLatitude = approximateLocation
+    ? roundCoordinate(location.latitude)
+    : location.latitude;
+  const publicLongitude = approximateLocation
+    ? roundCoordinate(location.longitude)
+    : location.longitude;
 
   // Location data is sensitive. Save exact coordinates only when RLS policies limit who can read them.
   const payload = {
@@ -213,13 +286,52 @@ export async function saveCurrentUserLocation({ userId, ghostMode, approximateLo
   return saveLocationPayload(client, payload);
 }
 
-export async function fetchVisibleNearbyUsers({ currentUserId, currentCoords, radius, friendIds = [] }) {
+export async function hideCurrentUserLocation(userId) {
+  if (!isUuid(userId)) {
+    return;
+  }
+
   const client = requireSupabase();
-  const { data, error } = await client
+  const { error } = await client
+    .from('locations')
+    .update({
+      is_visible: false,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('user_id', userId);
+
+  if (error) {
+    throw error;
+  }
+}
+
+export async function fetchVisibleNearbyUsers({
+  currentUserId,
+  currentCoords,
+  radius,
+  friendIds = [],
+}) {
+  if (!isUuid(currentUserId)) {
+    return [];
+  }
+
+  const client = requireSupabase();
+  const bounds = getCoordinateBounds(currentCoords, radius);
+  let query = client
     .from('locations')
     .select('*')
     .neq('user_id', currentUserId)
     .eq('is_visible', true);
+
+  if (bounds) {
+    query = query
+      .gte('public_latitude', bounds.minLatitude)
+      .lte('public_latitude', bounds.maxLatitude)
+      .gte('public_longitude', bounds.minLongitude)
+      .lte('public_longitude', bounds.maxLongitude);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     throw error;
@@ -245,20 +357,26 @@ export async function fetchVisibleNearbyUsers({ currentUserId, currentCoords, ra
   }
 
   return getLatestRowsByUserId(data)
-    .filter((row) => row.latitude && row.longitude)
+    .filter((row) => hasCoordinatePair(row))
     .map((row) => {
       const isFriend = friendIds.includes(row.user_id);
       const publicCoords = {
-        latitude: row.public_latitude || row.latitude,
-        longitude: row.public_longitude || row.longitude,
+        latitude: row.public_latitude ?? row.latitude,
+        longitude: row.public_longitude ?? row.longitude,
       };
       const displayCoords = isFriend
         ? { latitude: row.latitude, longitude: row.longitude }
         : publicCoords;
-      const distance = calculateCoordinateDistance(currentCoords, displayCoords);
+      const distance = calculateCoordinateDistance(
+        currentCoords,
+        displayCoords
+      );
 
       return {
-        ...normalizeLocationUser({ ...row, profile: profileMap[row.user_id] }, friendIds),
+        ...normalizeLocationUser(
+          { ...row, profile: profileMap[row.user_id] },
+          friendIds
+        ),
         distance: Math.round(distance),
         location: displayCoords,
       };
@@ -273,13 +391,22 @@ export function subscribeToLocations(onChange) {
 
   const channel = supabase
     .channel('locations:visible')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'locations' }, onChange)
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'locations' },
+      onChange
+    )
     .subscribe();
 
   return () => supabase.removeChannel(channel);
 }
 
-export async function createEncounterIfClose(userAId, userBId, coordsA, coordsB) {
+export async function createEncounterIfClose(
+  userAId,
+  userBId,
+  coordsA,
+  coordsB
+) {
   const client = requireSupabase();
   const distance = calculateCoordinateDistance(coordsA, coordsB);
 

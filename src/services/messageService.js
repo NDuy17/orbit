@@ -122,6 +122,33 @@ export async function fetchRecentConversations(limit = 30) {
     .filter(Boolean);
 }
 
+export async function fetchIncomingMessages(limit = 500) {
+  const client = requireSupabase();
+  const { data: authData, error: authError } = await client.auth.getUser();
+
+  if (authError) {
+    throw authError;
+  }
+
+  const userId = authData.user?.id;
+  if (!userId) {
+    return [];
+  }
+
+  const { data, error } = await client
+    .from('messages')
+    .select('id,sender_id,receiver_id,created_at')
+    .eq('receiver_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    throw error;
+  }
+
+  return data || [];
+}
+
 export function subscribeToMessages(otherUserId, currentUserId, onMessage) {
   if (!supabase) {
     return () => {};

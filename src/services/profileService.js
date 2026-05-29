@@ -1,4 +1,5 @@
 import DEFAULT_AVATAR_URL from '../constants/defaultAvatar';
+import { isRecentlyOnline } from '../utils/presence';
 import { textOr } from '../utils/text';
 import { requireSupabase, supabase } from './supabase';
 
@@ -20,6 +21,8 @@ export function mapProfileRow(row) {
     return null;
   }
 
+  const isOnline = isRecentlyOnline(row.is_online, row.last_active);
+
   return {
     id: row.id,
     name: textOr(row.full_name || row.username || row.name, 'Người dùng Orbit'),
@@ -27,17 +30,26 @@ export function mapProfileRow(row) {
     avatar_url: row.avatar_url,
     bio: textOr(row.bio, ''),
     status: textOr(row.status, ''),
-    isOnline: Boolean(row.is_online),
+    isOnline,
     lastActiveAt: row.last_active,
-    lastActive: row.is_online ? 'Đang online' : `Hoạt động lúc ${formatLastActiveTime(row.last_active)}`,
+    lastActive: isOnline
+      ? 'Đang online'
+      : `Hoạt động lúc ${formatLastActiveTime(row.last_active)}`,
     friends: row.friends_count || 0,
     met: row.encounters_count || 0,
     recent: row.recent_count || 0,
+    accountStatus: row.account_status || 'active',
+    disabledAt: row.disabled_at || null,
+    bannedAt: row.banned_at || null,
+    deletedAt: row.deleted_at || null,
+    moderationReason: textOr(row.moderation_reason, ''),
+    banExpiresAt: row.ban_expires_at || null,
   };
 }
 
-export async function createProfile(userId, profile) {
+export async function createProfile(userId, profile, options = {}) {
   const client = requireSupabase();
+  const isOnline = Boolean(options.isOnline);
   const payload = {
     id: userId,
     username: profile.username || null,
@@ -45,17 +57,30 @@ export async function createProfile(userId, profile) {
     avatar_url: profile.avatar_url || profile.avatar || DEFAULT_AVATAR_URL,
     bio: textOr(profile.bio, ''),
     status: textOr(profile.status, 'Mới tham gia Orbit'),
-    is_online: true,
+    is_online: isOnline,
     last_active: new Date().toISOString(),
   };
 
-  const { data, error } = await client.from('profiles').upsert(payload).select().single();
+  const { error } = await client.from('profiles').insert(payload);
 
-  if (error) {
+  if (!error) {
+    return mapProfileRow(payload);
+  }
+
+  if (error.code !== '23505') {
     throw error;
   }
 
-  return mapProfileRow(data);
+  const { error: updateError } = await client
+    .from('profiles')
+    .update(payload)
+    .eq('id', userId);
+
+  if (updateError) {
+    throw updateError;
+  }
+
+  return mapProfileRow(payload);
 }
 
 export async function fetchCurrentUserProfile() {
@@ -75,7 +100,11 @@ export async function fetchCurrentUserProfile() {
 
 export async function fetchProfileById(userId) {
   const client = requireSupabase();
-  const { data, error } = await client.from('profiles').select('*').eq('id', userId).single();
+  const { data, error } = await client
+    .from('profiles')
+    .select('*')
+    .eq('id', userId)
+    .single();
 
   if (error) {
     throw error;
@@ -93,7 +122,9 @@ export async function fetchProfileById(userId) {
       profile.friends = count;
     }
 
-    profile.friendIds = (friendRows || []).map((row) => row.friend_id).filter(Boolean);
+    profile.friendIds = (friendRows || [])
+      .map((row) => row.friend_id)
+      .filter(Boolean);
   } catch {
     // Friend count can be restricted by RLS; the profile row remains usable.
   }
@@ -111,7 +142,10 @@ function mergeProfileRows(rows) {
   return Array.from(items.values());
 }
 
-export async function searchProfilesByName(query, { limit = 8, offset = 0 } = {}) {
+export async function searchProfilesByName(
+  query,
+  { limit = 8, offset = 0 } = {}
+) {
   const client = requireSupabase();
   const { data: authData, error: authError } = await client.auth.getUser();
 
@@ -164,7 +198,10 @@ export async function searchProfilesByName(query, { limit = 8, offset = 0 } = {}
     }
   });
 
-  return mergeProfileRows(rows).slice(offset, offset + limit).map(mapProfileRow).filter(Boolean);
+  return mergeProfileRows(rows)
+    .slice(offset, offset + limit)
+    .map(mapProfileRow)
+    .filter(Boolean);
 }
 
 export async function updateProfile(userId, updates) {
@@ -182,7 +219,12 @@ export async function updateProfile(userId, updates) {
     }
   });
 
-  const { data, error } = await client.from('profiles').update(payload).eq('id', userId).select().single();
+  const { data, error } = await client
+    .from('profiles')
+    .update(payload)
+    .eq('id', userId)
+    .select()
+    .single();
 
   if (error) {
     throw error;
@@ -229,7 +271,11 @@ export function subscribeToProfiles(onChange) {
 
   const channel = supabase
     .channel('profiles:presence')
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles' }, onChange)
+    .on(
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'profiles' },
+      onChange
+    )
     .subscribe();
 
   return () => supabase.removeChannel(channel);

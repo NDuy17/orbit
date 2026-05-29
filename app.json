@@ -38,7 +38,8 @@
         {
           "photosPermission": "Cho phép Orbit mở thư viện ảnh để bạn chọn ảnh đại diện."
         }
-      ]
+      ],
+      "expo-notifications"
     ]
   }
 }

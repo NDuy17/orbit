@@ -12,10 +12,10 @@ import UserAvatar from './UserAvatar';
 export default function UserBottomSheet({
   user,
   onClose,
-  onChat,
   onProfile,
   onFriendAction,
   onDirections,
+  onReport,
   isDirectionsActive = false,
   isFriendActionLoading = false,
   actionNotice,
@@ -66,6 +66,7 @@ export default function UserBottomSheet({
               style={styles.actionButton}
             />
             <OrbitButton title="Xem hồ sơ" variant="ghost" onPress={onProfile} style={styles.actionButton} />
+            <OrbitButton title="Báo cáo" variant="ghost" onPress={onReport} style={styles.actionButton} />
           </View>
         </GlassCard>
       </Pressable>

@@ -1,6 +1,13 @@
 import { create } from 'zustand';
 import mockUsers, { currentUser } from '../data/mockUsers';
-import { getCurrentSession, loginWithEmail, logout, registerWithEmail } from '../services/authService';
+import {
+  getCurrentSession,
+  loginWithEmail,
+  logout,
+  registerWithEmail,
+} from '../services/authService';
+import { fetchCurrentAdminMembership } from '../services/adminService';
+import { removeRegisteredPushToken } from '../services/pushNotificationService';
 import {
   acceptFriendRequest,
   fetchFriendshipSnapshot,
@@ -17,10 +24,16 @@ import {
   updateProfile,
 } from '../services/profileService.js';
 import { hasSupabaseConfig } from '../services/supabase';
+import { getAccountRestriction } from '../utils/accountStatus';
 import { getVietnameseErrorMessage } from '../utils/errorMessages';
+import { isRecentlyOnline } from '../utils/presence';
 import { textOr } from '../utils/text';
 
 const mockFriends = mockUsers.filter((user) => user.isFriend);
+
+function hasCoordinatePair(value) {
+  return value?.latitude != null && value?.longitude != null;
+}
 
 function mapFriendProfile(row) {
   return {
@@ -33,7 +46,7 @@ function mapFriendProfile(row) {
     recent: row.recent_count || row.recent || 0,
     location: row.location
       ? row.location
-      : row.latitude && row.longitude
+      : hasCoordinatePair(row)
         ? { latitude: row.latitude, longitude: row.longitude }
         : null,
   };
@@ -96,6 +109,15 @@ function applyFriendshipToState(state) {
   };
 }
 
+function refreshPresenceItem(item) {
+  if (!item?.lastActiveAt) {
+    return item;
+  }
+
+  const isOnline = isRecentlyOnline(item.isOnline, item.lastActiveAt);
+  return item.isOnline === isOnline ? item : { ...item, isOnline };
+}
+
 function mergeUniqueById(items) {
   const map = new Map();
   items.forEach((item) => {
@@ -108,7 +130,11 @@ function mergeUniqueById(items) {
 
 function isMissingProfileError(error) {
   const message = String(error?.message || '').toLowerCase();
-  return message.includes('0 rows') || message.includes('no rows') || message.includes('pgrst116');
+  return (
+    message.includes('0 rows') ||
+    message.includes('no rows') ||
+    message.includes('pgrst116')
+  );
 }
 
 function normalizeSearchText(value) {
@@ -151,10 +177,40 @@ function searchLocalProfiles(state, cleanQuery) {
     .map((user) => withFriendshipStatus(user, state));
 }
 
+async function loadOrCreateProfileForSession(session, authUser = session?.user) {
+  try {
+    return await fetchCurrentUserProfile();
+  } catch (profileError) {
+    if (!isMissingProfileError(profileError) || !session?.user?.id) {
+      throw profileError;
+    }
+
+    return createProfile(
+      session.user.id,
+      {
+        name:
+          authUser?.user_metadata?.name ||
+          session.user.email ||
+          'Người dùng Orbit',
+      },
+      {
+        isOnline: true,
+      }
+    );
+  }
+}
+
 const useUserStore = create((set, get) => ({
   currentUser,
-  users: hasSupabaseConfig ? [] : mockUsers.map((user) => ({ ...user, friendshipStatus: user.isFriend ? 'friends' : 'none' })),
-  friends: hasSupabaseConfig ? [] : mockFriends.map((friend) => ({ ...friend, friendshipStatus: 'friends' })),
+  users: hasSupabaseConfig
+    ? []
+    : mockUsers.map((user) => ({
+        ...user,
+        friendshipStatus: user.isFriend ? 'friends' : 'none',
+      })),
+  friends: hasSupabaseConfig
+    ? []
+    : mockFriends.map((friend) => ({ ...friend, friendshipStatus: 'friends' })),
   pendingRequests: [],
   sentRequests: [],
   selectedUser: null,
@@ -164,7 +220,10 @@ const useUserStore = create((set, get) => ({
   friendActionLoading: {},
   actionNotice: null,
   error: null,
+  accountRestriction: null,
   isBackendReady: hasSupabaseConfig,
+  adminMembership: null,
+  isAdminAccount: false,
 
   setSelectedUser: (user) =>
     set((state) => ({ selectedUser: withFriendshipStatus(user, state) })),
@@ -174,13 +233,48 @@ const useUserStore = create((set, get) => ({
   setUsers: (users) =>
     set((state) => {
       const nextState = { ...state, users };
-      return { users: users.map((user) => withFriendshipStatus(user, nextState)) };
+      return {
+        users: users.map((user) => withFriendshipStatus(user, nextState)),
+      };
     }),
 
   setActionNotice: (actionNotice) => set({ actionNotice }),
   clearActionNotice: () => set({ actionNotice: null }),
   setError: (error) => set({ error }),
   clearError: () => set({ error: null }),
+  clearAccountRestriction: () => set({ accountRestriction: null, error: null }),
+
+  refreshPresenceStatus: () => {
+    if (!hasSupabaseConfig) {
+      return;
+    }
+
+    set((state) => ({
+      currentUser: refreshPresenceItem(state.currentUser),
+      users: state.users.map(refreshPresenceItem),
+      friends: state.friends.map(refreshPresenceItem),
+      selectedUser: refreshPresenceItem(state.selectedUser),
+    }));
+  },
+
+  loadAdminStatus: async () => {
+    if (!hasSupabaseConfig || !get().session) {
+      set({ adminMembership: null, isAdminAccount: false });
+      return null;
+    }
+
+    try {
+      const adminMembership = await fetchCurrentAdminMembership();
+      set({
+        adminMembership,
+        isAdminAccount: Boolean(adminMembership),
+      });
+      return adminMembership;
+    } catch {
+      set({ adminMembership: null, isAdminAccount: false });
+      return null;
+    }
+  },
 
   updateProfilePresence: (profileRow) =>
     set((state) => {
@@ -201,8 +295,18 @@ const useUserStore = create((set, get) => ({
               isOnline: mappedProfile.isOnline,
               lastActiveAt: mappedProfile.lastActiveAt,
               lastActive: mappedProfile.lastActive,
+              accountStatus: mappedProfile.accountStatus,
+              disabledAt: mappedProfile.disabledAt,
+              bannedAt: mappedProfile.bannedAt,
+              deletedAt: mappedProfile.deletedAt,
+              moderationReason: mappedProfile.moderationReason,
+              banExpiresAt: mappedProfile.banExpiresAt,
             }
           : item;
+      const accountRestriction =
+        state.currentUser.id === mappedProfile.id && !state.isAdminAccount
+          ? getAccountRestriction(mappedProfile)
+          : state.accountRestriction;
 
       return {
         currentUser:
@@ -212,7 +316,15 @@ const useUserStore = create((set, get) => ({
         users: state.users.map(applyProfile),
         friends: state.friends.map(applyProfile),
         selectedUser:
-          state.selectedUser?.id === mappedProfile.id ? applyProfile(state.selectedUser) : state.selectedUser,
+          state.selectedUser?.id === mappedProfile.id
+            ? applyProfile(state.selectedUser)
+            : state.selectedUser,
+        accountRestriction,
+        error: accountRestriction
+          ? accountRestriction.message
+          : state.accountRestriction
+            ? null
+            : state.error,
       };
     }),
 
@@ -221,51 +333,141 @@ const useUserStore = create((set, get) => ({
       return null;
     }
 
-    set({ authLoading: true, error: null });
+    set({ authLoading: true, error: null, accountRestriction: null });
     try {
       const session = await getCurrentSession();
-      if (session) {
-        await updateOnlineStatus(true).catch(() => {});
+      if (!session) {
+        set({
+          session: null,
+          authLoading: false,
+          adminMembership: null,
+          isAdminAccount: false,
+          accountRestriction: null,
+        });
+        return null;
       }
-      set({ session, authLoading: false });
+
+      const adminMembership = await fetchCurrentAdminMembership().catch(
+        () => null
+      );
+      const profile = await loadOrCreateProfileForSession(session);
+      const accountRestriction = adminMembership
+        ? null
+        : getAccountRestriction(profile);
+
+      if (accountRestriction) {
+        await removeRegisteredPushToken().catch(() => {});
+        await logout().catch(() => {});
+        set({
+          session: null,
+          currentUser: profile || currentUser,
+          users: [],
+          friends: [],
+          pendingRequests: [],
+          sentRequests: [],
+          adminMembership: null,
+          isAdminAccount: false,
+          accountRestriction,
+          error: accountRestriction.message,
+          authLoading: false,
+        });
+        return null;
+      }
+
+      const onlineProfile = await updateOnlineStatus(true).catch(() => null);
+      set((state) => ({
+        session,
+        currentUser: withOwnStats(
+          onlineProfile ||
+            profile || {
+              ...currentUser,
+              id: session.user?.id || currentUser.id,
+            },
+          state
+        ),
+        adminMembership,
+        isAdminAccount: Boolean(adminMembership),
+        authLoading: false,
+        accountRestriction: null,
+        error: null,
+      }));
       return session;
     } catch (error) {
-      set({ error: getVietnameseErrorMessage(error.message), authLoading: false });
+      set({
+        error: getVietnameseErrorMessage(error.message),
+        authLoading: false,
+      });
       return null;
     }
   },
 
   login: async (email, password) => {
     if (!hasSupabaseConfig) {
-      set({ session: { user: { id: 'me' } }, error: null });
+      set({
+        session: { user: { id: 'me' } },
+        error: null,
+        accountRestriction: null,
+      });
       return true;
     }
 
-    set({ authLoading: true, error: null });
+    set({ authLoading: true, error: null, accountRestriction: null });
     try {
       const data = await loginWithEmail(email, password);
-      await updateOnlineStatus(true).catch(() => {});
-      let profile;
-      try {
-        profile = await fetchCurrentUserProfile();
-      } catch (profileError) {
-        if (!isMissingProfileError(profileError)) {
-          throw profileError;
-        }
+      const adminMembership = await fetchCurrentAdminMembership().catch(
+        () => null
+      );
+      const profile = await loadOrCreateProfileForSession(
+        data.session,
+        data.user
+      );
+      const accountRestriction = adminMembership
+        ? null
+        : getAccountRestriction(profile);
 
-        profile = await createProfile(data.session.user.id, {
-          name: data.user?.user_metadata?.name || data.session.user.email || 'Người dùng Orbit',
+      if (accountRestriction) {
+        await removeRegisteredPushToken().catch(() => {});
+        await logout().catch(() => {});
+        set({
+          session: null,
+          currentUser: profile || currentUser,
+          users: [],
+          friends: [],
+          pendingRequests: [],
+          sentRequests: [],
+          adminMembership: null,
+          isAdminAccount: false,
+          accountRestriction,
+          error: accountRestriction.message,
+          authLoading: false,
         });
+        return false;
       }
-      set({
+
+      const onlineProfile = await updateOnlineStatus(true).catch(() => null);
+      set((state) => ({
         session: data.session,
-        currentUser: profile || { ...currentUser, id: data.session?.user?.id || currentUser.id },
+        currentUser: withOwnStats(
+          onlineProfile ||
+            profile || {
+              ...currentUser,
+              id: data.session?.user?.id || currentUser.id,
+            },
+          state
+        ),
+        adminMembership,
+        isAdminAccount: Boolean(adminMembership),
+        accountRestriction: null,
+        error: null,
         authLoading: false,
-      });
+      }));
       await get().refreshFriendData();
       return true;
     } catch (error) {
-      set({ error: getVietnameseErrorMessage(error.message), authLoading: false });
+      set({
+        error: getVietnameseErrorMessage(error.message),
+        authLoading: false,
+      });
       return false;
     }
   },
@@ -276,11 +478,12 @@ const useUserStore = create((set, get) => ({
         session: { user: { id: 'me' } },
         currentUser: { ...currentUser, name: profile.name || currentUser.name },
         error: null,
+        accountRestriction: null,
       });
       return true;
     }
 
-    set({ authLoading: true, error: null });
+    set({ authLoading: true, error: null, accountRestriction: null });
     try {
       const data = await registerWithEmail(email, password, profile);
       if (data.session) {
@@ -288,20 +491,27 @@ const useUserStore = create((set, get) => ({
       }
       set({
         session: data.session,
+        adminMembership: null,
+        isAdminAccount: false,
         currentUser: {
           ...currentUser,
           id: data.user?.id || currentUser.id,
           name: profile.name || currentUser.name,
         },
-        error: data.session ? null : 'Tài khoản đã tạo. Hãy kiểm tra email để xác nhận rồi đăng nhập.',
+        error: null,
+        accountRestriction: null,
         authLoading: false,
       });
       if (data.session) {
         await get().refreshFriendData();
+        return true;
       }
-      return Boolean(data.session);
+      return data.user ? 'needs_confirmation' : false;
     } catch (error) {
-      set({ error: getVietnameseErrorMessage(error.message), authLoading: false });
+      set({
+        error: getVietnameseErrorMessage(error.message),
+        authLoading: false,
+      });
       return false;
     }
   },
@@ -311,18 +521,38 @@ const useUserStore = create((set, get) => ({
       set({
         session: null,
         currentUser,
-        users: mockUsers.map((user) => ({ ...user, friendshipStatus: user.isFriend ? 'friends' : 'none' })),
-        friends: mockFriends.map((friend) => ({ ...friend, friendshipStatus: 'friends' })),
+        users: mockUsers.map((user) => ({
+          ...user,
+          friendshipStatus: user.isFriend ? 'friends' : 'none',
+        })),
+        friends: mockFriends.map((friend) => ({
+          ...friend,
+          friendshipStatus: 'friends',
+        })),
         pendingRequests: [],
         sentRequests: [],
+        adminMembership: null,
+        isAdminAccount: false,
+        accountRestriction: null,
       });
       return;
     }
 
     try {
+      await removeRegisteredPushToken().catch(() => {});
       await updateOnlineStatus(false).catch(() => {});
       await logout();
-      set({ session: null, currentUser, users: [], friends: [], pendingRequests: [], sentRequests: [] });
+      set({
+        session: null,
+        currentUser,
+        users: [],
+        friends: [],
+        pendingRequests: [],
+        sentRequests: [],
+        adminMembership: null,
+        isAdminAccount: false,
+        accountRestriction: null,
+      });
     } catch (error) {
       set({ error: getVietnameseErrorMessage(error.message) });
     }
@@ -337,7 +567,15 @@ const useUserStore = create((set, get) => ({
     try {
       const profile = await fetchCurrentUserProfile();
       if (profile) {
-        set((state) => ({ currentUser: withOwnStats(profile, state), backendLoading: false }));
+        const accountRestriction = get().isAdminAccount
+          ? null
+          : getAccountRestriction(profile);
+        set((state) => ({
+          currentUser: withOwnStats(profile, state),
+          backendLoading: false,
+          accountRestriction,
+          error: accountRestriction ? accountRestriction.message : null,
+        }));
       } else {
         set({ backendLoading: false });
       }
@@ -345,18 +583,34 @@ const useUserStore = create((set, get) => ({
     } catch (error) {
       if (isMissingProfileError(error) && get().session?.user?.id) {
         try {
-          const profile = await createProfile(get().session.user.id, {
-            name: get().session.user.email || 'Người dùng Orbit',
-          });
-          set((state) => ({ currentUser: withOwnStats(profile, state), backendLoading: false }));
+          const profile = await createProfile(
+            get().session.user.id,
+            {
+              name: get().session.user.email || 'Người dùng Orbit',
+            },
+            {
+              isOnline: true,
+            }
+          );
+          set((state) => ({
+            currentUser: withOwnStats(profile, state),
+            backendLoading: false,
+            accountRestriction: null,
+          }));
           return profile;
         } catch (createError) {
-          set({ error: getVietnameseErrorMessage(createError.message), backendLoading: false });
+          set({
+            error: getVietnameseErrorMessage(createError.message),
+            backendLoading: false,
+          });
           return null;
         }
       }
 
-      set({ error: getVietnameseErrorMessage(error.message), backendLoading: false });
+      set({
+        error: getVietnameseErrorMessage(error.message),
+        backendLoading: false,
+      });
       return null;
     }
   },
@@ -388,16 +642,25 @@ const useUserStore = create((set, get) => ({
       const profile = await updateProfile(current.id, nextUpdates);
       set((state) => ({
         currentUser: withOwnStats(profile, state),
-        users: state.users.map((user) => (user.id === profile.id ? { ...user, ...profile } : user)),
-        friends: state.friends.map((friend) => (friend.id === profile.id ? { ...friend, ...profile } : friend)),
+        users: state.users.map((user) =>
+          user.id === profile.id ? { ...user, ...profile } : user
+        ),
+        friends: state.friends.map((friend) =>
+          friend.id === profile.id ? { ...friend, ...profile } : friend
+        ),
         selectedUser:
-          state.selectedUser?.id === profile.id ? { ...state.selectedUser, ...profile } : state.selectedUser,
+          state.selectedUser?.id === profile.id
+            ? { ...state.selectedUser, ...profile }
+            : state.selectedUser,
         backendLoading: false,
         error: null,
       }));
       return profile;
     } catch (error) {
-      set({ error: getVietnameseErrorMessage(error.message), backendLoading: false });
+      set({
+        error: getVietnameseErrorMessage(error.message),
+        backendLoading: false,
+      });
       throw error;
     }
   },
@@ -410,7 +673,14 @@ const useUserStore = create((set, get) => ({
     try {
       const profile = await updateOnlineStatus(isOnline);
       if (profile) {
-        set((state) => ({ currentUser: withOwnStats(profile, state), error: null }));
+        const accountRestriction = get().isAdminAccount
+          ? null
+          : getAccountRestriction(profile);
+        set((state) => ({
+          currentUser: withOwnStats(profile, state),
+          accountRestriction,
+          error: accountRestriction ? accountRestriction.message : null,
+        }));
       }
     } catch (error) {
       // Presence updates are best-effort. Do not flash an app-wide error if the
@@ -442,17 +712,24 @@ const useUserStore = create((set, get) => ({
             ...nextState.currentUser,
             friends: mappedFriends.length,
           },
-          friends: nextState.friends.map((friend) => withFriendshipStatus(friend, nextState)),
+          friends: nextState.friends.map((friend) =>
+            withFriendshipStatus(friend, nextState)
+          ),
           pendingRequests: nextState.pendingRequests,
           sentRequests: nextState.sentRequests,
-          users: nextState.users.map((user) => withFriendshipStatus(user, nextState)),
+          users: nextState.users.map((user) =>
+            withFriendshipStatus(user, nextState)
+          ),
           selectedUser: withFriendshipStatus(nextState.selectedUser, nextState),
           error: null,
           backendLoading: false,
         };
       });
     } catch (error) {
-      set({ error: getVietnameseErrorMessage(error.message), backendLoading: false });
+      set({
+        error: getVietnameseErrorMessage(error.message),
+        backendLoading: false,
+      });
     }
   },
 
@@ -481,7 +758,10 @@ const useUserStore = create((set, get) => ({
       const nextState = {
         ...state,
         sentRequests: [...state.sentRequests, tempRequest],
-        friendActionLoading: { ...state.friendActionLoading, [receiverId]: true },
+        friendActionLoading: {
+          ...state.friendActionLoading,
+          [receiverId]: true,
+        },
         actionNotice: 'Đã gửi lời mời kết bạn.',
         error: null,
       };
@@ -490,7 +770,9 @@ const useUserStore = create((set, get) => ({
         sentRequests: nextState.sentRequests,
         friendActionLoading: nextState.friendActionLoading,
         actionNotice: nextState.actionNotice,
-        users: nextState.users.map((user) => withFriendshipStatus(user, nextState)),
+        users: nextState.users.map((user) =>
+          withFriendshipStatus(user, nextState)
+        ),
         selectedUser: withFriendshipStatus(nextState.selectedUser, nextState),
         error: null,
       };
@@ -504,15 +786,22 @@ const useUserStore = create((set, get) => ({
       set((state) => {
         const nextState = {
           ...state,
-          sentRequests: state.sentRequests.filter((request) => request.id !== tempRequest.id),
-          friendActionLoading: { ...state.friendActionLoading, [receiverId]: false },
+          sentRequests: state.sentRequests.filter(
+            (request) => request.id !== tempRequest.id
+          ),
+          friendActionLoading: {
+            ...state.friendActionLoading,
+            [receiverId]: false,
+          },
           error: getVietnameseErrorMessage(error.message),
         };
 
         return {
           sentRequests: nextState.sentRequests,
           friendActionLoading: nextState.friendActionLoading,
-          users: nextState.users.map((user) => withFriendshipStatus(user, nextState)),
+          users: nextState.users.map((user) =>
+            withFriendshipStatus(user, nextState)
+          ),
           selectedUser: withFriendshipStatus(nextState.selectedUser, nextState),
           error: nextState.error,
         };
@@ -520,7 +809,10 @@ const useUserStore = create((set, get) => ({
       return false;
     } finally {
       set((state) => ({
-        friendActionLoading: { ...state.friendActionLoading, [receiverId]: false },
+        friendActionLoading: {
+          ...state.friendActionLoading,
+          [receiverId]: false,
+        },
       }));
     }
   },
@@ -530,18 +822,31 @@ const useUserStore = create((set, get) => ({
       return;
     }
 
-    const request = get().pendingRequests.find((item) => String(item.id) === String(requestId));
-    const senderProfile = request?.sender ? mapFriendProfile(request.sender) : null;
+    const request = get().pendingRequests.find(
+      (item) => String(item.id) === String(requestId)
+    );
+    const senderProfile = request?.sender
+      ? mapFriendProfile(request.sender)
+      : null;
     const actionUserId = request?.sender_id || requestId;
 
     set((state) => {
-      const nextFriends = senderProfile ? mergeUniqueById([...state.friends, senderProfile]) : state.friends;
+      const nextFriends = senderProfile
+        ? mergeUniqueById([...state.friends, senderProfile])
+        : state.friends;
       const nextState = {
         ...state,
         friends: nextFriends,
-        pendingRequests: state.pendingRequests.filter((item) => String(item.id) !== String(requestId)),
-        sentRequests: state.sentRequests.filter((item) => item.receiver_id !== actionUserId),
-        friendActionLoading: { ...state.friendActionLoading, [actionUserId]: true },
+        pendingRequests: state.pendingRequests.filter(
+          (item) => String(item.id) !== String(requestId)
+        ),
+        sentRequests: state.sentRequests.filter(
+          (item) => item.receiver_id !== actionUserId
+        ),
+        friendActionLoading: {
+          ...state.friendActionLoading,
+          [actionUserId]: true,
+        },
         actionNotice: 'Hai bạn đã trở thành bạn bè.',
         error: null,
       };
@@ -551,12 +856,16 @@ const useUserStore = create((set, get) => ({
           ...nextState.currentUser,
           friends: nextFriends.length,
         },
-        friends: nextState.friends.map((friend) => withFriendshipStatus(friend, nextState)),
+        friends: nextState.friends.map((friend) =>
+          withFriendshipStatus(friend, nextState)
+        ),
         pendingRequests: nextState.pendingRequests,
         sentRequests: nextState.sentRequests,
         friendActionLoading: nextState.friendActionLoading,
         actionNotice: nextState.actionNotice,
-        users: nextState.users.map((user) => withFriendshipStatus(user, nextState)),
+        users: nextState.users.map((user) =>
+          withFriendshipStatus(user, nextState)
+        ),
         selectedUser: withFriendshipStatus(nextState.selectedUser, nextState),
         error: null,
       };
@@ -570,13 +879,18 @@ const useUserStore = create((set, get) => ({
       await get().refreshFriendData();
     } finally {
       set((state) => ({
-        friendActionLoading: { ...state.friendActionLoading, [actionUserId]: false },
+        friendActionLoading: {
+          ...state.friendActionLoading,
+          [actionUserId]: false,
+        },
       }));
     }
   },
 
   acceptRequestForUser: async (userId) => {
-    const request = get().pendingRequests.find((item) => item.sender_id === userId);
+    const request = get().pendingRequests.find(
+      (item) => item.sender_id === userId
+    );
     if (request) {
       await get().acceptRequest(request.id);
     }
@@ -587,20 +901,29 @@ const useUserStore = create((set, get) => ({
       return;
     }
 
-    const request = get().pendingRequests.find((item) => String(item.id) === String(requestId));
+    const request = get().pendingRequests.find(
+      (item) => String(item.id) === String(requestId)
+    );
     const actionUserId = request?.sender_id || requestId;
 
     set((state) => {
       const nextState = {
         ...state,
-        pendingRequests: state.pendingRequests.filter((item) => String(item.id) !== String(requestId)),
-        friendActionLoading: { ...state.friendActionLoading, [actionUserId]: true },
+        pendingRequests: state.pendingRequests.filter(
+          (item) => String(item.id) !== String(requestId)
+        ),
+        friendActionLoading: {
+          ...state.friendActionLoading,
+          [actionUserId]: true,
+        },
       };
 
       return {
         pendingRequests: nextState.pendingRequests,
         friendActionLoading: nextState.friendActionLoading,
-        users: nextState.users.map((user) => withFriendshipStatus(user, nextState)),
+        users: nextState.users.map((user) =>
+          withFriendshipStatus(user, nextState)
+        ),
         selectedUser: withFriendshipStatus(nextState.selectedUser, nextState),
       };
     });
@@ -613,7 +936,10 @@ const useUserStore = create((set, get) => ({
       await get().refreshFriendData();
     } finally {
       set((state) => ({
-        friendActionLoading: { ...state.friendActionLoading, [actionUserId]: false },
+        friendActionLoading: {
+          ...state.friendActionLoading,
+          [actionUserId]: false,
+        },
       }));
     }
   },
@@ -632,9 +958,16 @@ const useUserStore = create((set, get) => ({
         };
 
         return {
-          friends: nextState.friends.map((friend) => withFriendshipStatus(friend, nextState)),
-          currentUser: { ...state.currentUser, friends: nextState.friends.length },
-          users: nextState.users.map((user) => withFriendshipStatus(user, nextState)),
+          friends: nextState.friends.map((friend) =>
+            withFriendshipStatus(friend, nextState)
+          ),
+          currentUser: {
+            ...state.currentUser,
+            friends: nextState.friends.length,
+          },
+          users: nextState.users.map((user) =>
+            withFriendshipStatus(user, nextState)
+          ),
           selectedUser: withFriendshipStatus(nextState.selectedUser, nextState),
           actionNotice: nextState.actionNotice,
         };
@@ -657,7 +990,10 @@ const useUserStore = create((set, get) => ({
       return false;
     } finally {
       set((state) => ({
-        friendActionLoading: { ...state.friendActionLoading, [friendId]: false },
+        friendActionLoading: {
+          ...state.friendActionLoading,
+          [friendId]: false,
+        },
       }));
     }
   },
@@ -700,7 +1036,10 @@ const useUserStore = create((set, get) => ({
       set({ backendLoading: false, error: null });
       return results;
     } catch (error) {
-      set({ backendLoading: false, error: getVietnameseErrorMessage(error.message) });
+      set({
+        backendLoading: false,
+        error: getVietnameseErrorMessage(error.message),
+      });
       return [];
     }
   },

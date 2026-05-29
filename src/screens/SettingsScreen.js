@@ -1,6 +1,7 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import OrbitButton from '../components/OrbitButton';
 import colors, { themePalettes } from '../theme/colors';
 import useThemeStore from '../store/themeStore';
 import spacing from '../theme/spacing';
@@ -12,7 +13,7 @@ const themeOptions = [
   { key: 'light', title: 'Nền sáng', description: 'Màu sáng vui mắt, dễ nhìn ngoài trời.' },
 ];
 
-export default function SettingsScreen() {
+export default function SettingsScreen({ navigation }) {
   const { themeName, setThemeName } = useThemeStore();
 
   return (
@@ -51,6 +52,10 @@ export default function SettingsScreen() {
           );
         })}
       </View>
+      <View style={styles.supportSection}>
+        <Text style={styles.sectionTitle}>Hỗ trợ</Text>
+        <OrbitButton title="Gửi góp ý cho Orbit" variant="ghost" onPress={() => navigation.navigate('Feedback')} />
+      </View>
     </SafeAreaView>
   );
 }
@@ -73,6 +78,10 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   options: {
+    gap: spacing.md,
+  },
+  supportSection: {
+    marginTop: spacing.xl,
     gap: spacing.md,
   },
   option: {
