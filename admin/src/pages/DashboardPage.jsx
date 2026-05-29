@@ -214,8 +214,13 @@ export default function DashboardPage() {
         </CardHeader>
         <CardContent>
           {data?.chartData?.length ? (
-            <div className="h-80">
-              <ResponsiveContainer width="100%" height="100%">
+            <div className="min-h-80 min-w-0">
+              <ResponsiveContainer
+                width="100%"
+                height={320}
+                minWidth={0}
+                minHeight={320}
+              >
                 <AreaChart
                   data={data.chartData}
                   margin={{ top: 10, right: 20, left: 0, bottom: 0 }}

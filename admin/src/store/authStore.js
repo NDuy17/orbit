@@ -1,8 +1,26 @@
 import { create } from 'zustand';
 import { getAdminMembership } from '../services/adminApi';
-import { hasSupabaseConfig, supabase } from '../services/supabaseClient';
+import {
+  clearSupabaseAuthStorage,
+  hasSupabaseConfig,
+  isInvalidRefreshTokenError,
+  supabase,
+} from '../services/supabaseClient';
 
 let authSubscription = null;
+
+async function clearLocalAdminSession() {
+  if (!supabase) {
+    return;
+  }
+
+  const { error } = await supabase.auth.signOut({ scope: 'local' });
+  clearSupabaseAuthStorage();
+
+  if (error && !isInvalidRefreshTokenError(error)) {
+    throw error;
+  }
+}
 
 async function resolveAdminSession(session) {
   if (!session?.user) {
@@ -11,7 +29,9 @@ async function resolveAdminSession(session) {
 
   const admin = await getAdminMembership(session.user.id);
   if (!admin) {
-    await supabase.auth.signOut();
+    await clearLocalAdminSession().catch(() => {
+      clearSupabaseAuthStorage();
+    });
     return {
       session: null,
       user: null,
@@ -54,6 +74,18 @@ const useAuthStore = create((set, get) => ({
     try {
       const { data, error } = await supabase.auth.getSession();
       if (error) {
+        if (isInvalidRefreshTokenError(error)) {
+          clearSupabaseAuthStorage();
+          set({
+            session: null,
+            user: null,
+            admin: null,
+            status: 'unauthenticated',
+            error: null,
+          });
+          return;
+        }
+
         throw error;
       }
 
@@ -108,9 +140,9 @@ const useAuthStore = create((set, get) => ({
     return resolvedSession;
   },
   signOut: async () => {
-    if (supabase) {
-      await supabase.auth.signOut();
-    }
+    await clearLocalAdminSession().catch(() => {
+      clearSupabaseAuthStorage();
+    });
 
     set({
       session: null,

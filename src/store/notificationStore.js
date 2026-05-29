@@ -96,9 +96,12 @@ const useNotificationStore = create((set, get) => ({
     }
   },
 
-  refreshNotifications: async () => {
+  refreshNotifications: async ({ userId } = {}) => {
     set({ refreshing: true });
-    return get().loadNotifications({ silent: true });
+    return get().loadNotifications({
+      silent: true,
+      userId: userId || get().userId,
+    });
   },
 
   markNotificationsSeen: async (userId) => {

@@ -16,6 +16,42 @@ export const hasSupabaseConfig = Boolean(
   supabaseUrl && supabaseAnonKey && supabaseUrl.startsWith('https://')
 );
 
+function getAuthStorageKey() {
+  if (!hasSupabaseConfig) {
+    return null;
+  }
+
+  try {
+    return `sb-${new URL(supabaseUrl).hostname.split('.')[0]}-auth-token`;
+  } catch {
+    return null;
+  }
+}
+
+export const supabaseAuthStorageKey = getAuthStorageKey();
+
+export function isInvalidRefreshTokenError(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+
+  return (
+    message.includes('invalid refresh token') ||
+    message.includes('refresh token not found') ||
+    message.includes('auth session missing')
+  );
+}
+
+export function clearSupabaseAuthStorage() {
+  if (!supabaseAuthStorageKey || typeof window === 'undefined') {
+    return;
+  }
+
+  [
+    supabaseAuthStorageKey,
+    `${supabaseAuthStorageKey}-code-verifier`,
+    `${supabaseAuthStorageKey}-user`,
+  ].forEach((key) => window.localStorage.removeItem(key));
+}
+
 export const supabase = hasSupabaseConfig
   ? createClient(supabaseUrl, supabaseAnonKey, {
       auth: {

@@ -6,9 +6,18 @@ import {
   ShieldAlert,
   Users,
 } from 'lucide-react';
+import { useEffect } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
+import { prefetchAsyncData } from '../hooks/useAsyncData';
+import {
+  getDashboardStats,
+  getFeedbacks,
+  getNotifications,
+  getReports,
+  getUsers,
+} from '../services/adminApi';
 import useAuthStore from '../store/authStore';
 import { cn } from '../utils/cn';
 import { roleLabel } from '../utils/roles';
@@ -28,6 +37,36 @@ const titles = {
   '/feedback': 'Góp ý người dùng',
   '/notifications': 'Thông báo',
 };
+
+const prefetchItems = [
+  ['dashboard', getDashboardStats],
+  [
+    'users::all:all:1',
+    () =>
+      getUsers({
+        search: '',
+        status: 'all',
+        online: 'all',
+        page: 1,
+        pageSize: 10,
+      }),
+  ],
+  [
+    'reports:pending:1',
+    () => getReports({ status: 'pending', page: 1, pageSize: 12 }),
+  ],
+  [
+    'feedback:all:open:1',
+    () => getFeedbacks({ type: 'all', status: 'open', page: 1, pageSize: 12 }),
+  ],
+  ['notifications:1', () => getNotifications({ page: 1, pageSize: 12 })],
+];
+
+function warmAdminCaches() {
+  prefetchItems.forEach(([cacheKey, loader]) => {
+    prefetchAsyncData(cacheKey, loader).catch(() => {});
+  });
+}
 
 function Sidebar() {
   return (
@@ -100,6 +139,21 @@ export default function AdminLayout() {
   const user = useAuthStore((state) => state.user);
   const admin = useAuthStore((state) => state.admin);
   const title = titles[location.pathname] || 'Orbit Admin';
+
+  useEffect(() => {
+    if (!admin) {
+      return undefined;
+    }
+
+    const scheduleIdleWork =
+      window.requestIdleCallback ||
+      ((callback) => window.setTimeout(callback, 150));
+    const cancelIdleWork =
+      window.cancelIdleCallback || ((id) => window.clearTimeout(id));
+    const idleId = scheduleIdleWork(warmAdminCaches);
+
+    return () => cancelIdleWork(idleId);
+  }, [admin]);
 
   return (
     <div className="flex min-h-screen bg-surface">

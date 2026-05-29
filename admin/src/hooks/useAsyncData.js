@@ -1,14 +1,58 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 const dataCache = new Map();
+const requestCache = new Map();
+
+function hasCachedData(cacheKey) {
+  return Boolean(cacheKey && dataCache.has(cacheKey));
+}
+
+function getCachedData(cacheKey) {
+  return cacheKey ? dataCache.get(cacheKey) : undefined;
+}
+
+function setCachedData(cacheKey, data) {
+  if (cacheKey) {
+    dataCache.set(cacheKey, data);
+  }
+}
+
+export function prefetchAsyncData(cacheKey, loader, { force = false } = {}) {
+  if (!cacheKey) {
+    return Promise.resolve().then(loader);
+  }
+
+  if (!force && dataCache.has(cacheKey)) {
+    return Promise.resolve(dataCache.get(cacheKey));
+  }
+
+  if (requestCache.has(cacheKey)) {
+    return requestCache.get(cacheKey);
+  }
+
+  const request = Promise.resolve()
+    .then(loader)
+    .then((result) => {
+      setCachedData(cacheKey, result);
+      return result;
+    })
+    .finally(() => {
+      requestCache.delete(cacheKey);
+    });
+
+  requestCache.set(cacheKey, request);
+  return request;
+}
 
 export function useAsyncData(loader, dependencies = [], options = {}) {
   const { immediate = true, initialData = null, cacheKey } = options;
-  const hasInitialCache = Boolean(cacheKey && dataCache.has(cacheKey));
+  const hasInitialCache = hasCachedData(cacheKey);
   const [data, setData] = useState(
-    hasInitialCache ? dataCache.get(cacheKey) : initialData
+    hasInitialCache ? getCachedData(cacheKey) : initialData
   );
-  const [loading, setLoading] = useState(immediate && !hasInitialCache);
+  const [loading, setLoading] = useState(
+    immediate && !hasInitialCache && initialData == null
+  );
   const [error, setError] = useState(null);
   const loaderRef = useRef(loader);
   const dataRef = useRef(data);
@@ -17,32 +61,25 @@ export function useAsyncData(loader, dependencies = [], options = {}) {
 
   function commitData(nextData) {
     dataRef.current = nextData;
-    if (cacheKey) {
-      dataCache.set(cacheKey, nextData);
-    }
+    setCachedData(cacheKey, nextData);
     setData(nextData);
   }
 
   const refresh = useCallback(async () => {
-    let active = true;
     setLoading(!dataRef.current);
     setError(null);
 
     try {
-      const result = await loaderRef.current();
-      if (active) {
-        commitData(result);
-      }
+      const result = await prefetchAsyncData(cacheKey, loaderRef.current, {
+        force: true,
+      });
+      commitData(result);
       return result;
     } catch (caughtError) {
-      if (active) {
-        setError(caughtError);
-      }
+      setError(caughtError);
       throw caughtError;
     } finally {
-      if (active) {
-        setLoading(false);
-      }
+      setLoading(false);
     }
   }, dependencies);
 
@@ -52,18 +89,19 @@ export function useAsyncData(loader, dependencies = [], options = {}) {
     }
 
     let cancelled = false;
-    const cachedData = cacheKey ? dataCache.get(cacheKey) : undefined;
+    const cachedData = getCachedData(cacheKey);
     if (cachedData !== undefined) {
       dataRef.current = cachedData;
       setData(cachedData);
       setLoading(false);
     } else {
-      setLoading(true);
+      dataRef.current = initialData;
+      setData(initialData);
+      setLoading(initialData == null);
     }
     setError(null);
 
-    loaderRef
-      .current()
+    prefetchAsyncData(cacheKey, loaderRef.current, { force: true })
       .then((result) => {
         if (!cancelled) {
           commitData(result);

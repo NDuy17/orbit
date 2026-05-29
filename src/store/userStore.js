@@ -517,45 +517,47 @@ const useUserStore = create((set, get) => ({
   },
 
   logoutUser: async () => {
+    const loggedOutState = {
+      session: null,
+      currentUser,
+      users: hasSupabaseConfig
+        ? []
+        : mockUsers.map((user) => ({
+            ...user,
+            friendshipStatus: user.isFriend ? 'friends' : 'none',
+          })),
+      friends: hasSupabaseConfig
+        ? []
+        : mockFriends.map((friend) => ({
+            ...friend,
+            friendshipStatus: 'friends',
+          })),
+      pendingRequests: [],
+      sentRequests: [],
+      adminMembership: null,
+      isAdminAccount: false,
+      accountRestriction: null,
+      error: null,
+    };
+
     if (!hasSupabaseConfig) {
-      set({
-        session: null,
-        currentUser,
-        users: mockUsers.map((user) => ({
-          ...user,
-          friendshipStatus: user.isFriend ? 'friends' : 'none',
-        })),
-        friends: mockFriends.map((friend) => ({
-          ...friend,
-          friendshipStatus: 'friends',
-        })),
-        pendingRequests: [],
-        sentRequests: [],
-        adminMembership: null,
-        isAdminAccount: false,
-        accountRestriction: null,
-      });
+      set(loggedOutState);
       return;
     }
 
+    let logoutError = null;
     try {
       await removeRegisteredPushToken().catch(() => {});
       await updateOnlineStatus(false).catch(() => {});
       await logout();
-      set({
-        session: null,
-        currentUser,
-        users: [],
-        friends: [],
-        pendingRequests: [],
-        sentRequests: [],
-        adminMembership: null,
-        isAdminAccount: false,
-        accountRestriction: null,
-      });
     } catch (error) {
-      set({ error: getVietnameseErrorMessage(error.message) });
+      logoutError = getVietnameseErrorMessage(error.message);
     }
+
+    set({
+      ...loggedOutState,
+      error: logoutError,
+    });
   },
 
   loadCurrentProfile: async () => {

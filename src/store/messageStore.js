@@ -137,9 +137,12 @@ const useMessageStore = create((set, get) => ({
     }
   },
 
-  refreshConversations: async () => {
+  refreshConversations: async ({ currentUserId } = {}) => {
     set({ refreshing: true });
-    return get().loadConversations({ silent: true });
+    return get().loadConversations({
+      silent: true,
+      currentUserId: currentUserId || get().currentUserId,
+    });
   },
 
   markConversationSeen: async (userId, seenAt, currentUserId) => {

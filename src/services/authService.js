@@ -1,5 +1,10 @@
 import { createProfile } from './profileService.js';
-import { requireSupabase, supabase } from './supabase';
+import {
+  clearSupabaseAuthStorage,
+  isInvalidRefreshTokenError,
+  requireSupabase,
+  supabase,
+} from './supabase';
 import DEFAULT_AVATAR_URL from '../constants/defaultAvatar';
 
 export async function registerWithEmail(email, password, profile) {
@@ -50,11 +55,18 @@ export async function loginWithEmail(email, password) {
 
 export async function logout() {
   const client = requireSupabase();
-  const { error } = await client.auth.signOut();
+  const { error } = await client.auth.signOut({ scope: 'local' });
 
   if (error) {
+    await clearSupabaseAuthStorage();
+    if (isInvalidRefreshTokenError(error)) {
+      return;
+    }
+
     throw error;
   }
+
+  await clearSupabaseAuthStorage();
 }
 
 export async function getCurrentSession() {
@@ -65,6 +77,11 @@ export async function getCurrentSession() {
   const { data, error } = await supabase.auth.getSession();
 
   if (error) {
+    if (isInvalidRefreshTokenError(error)) {
+      await clearSupabaseAuthStorage();
+      return null;
+    }
+
     throw error;
   }
 

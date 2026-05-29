@@ -11,6 +11,8 @@ export default function DataTable({
   rowKey = 'id',
   className,
 }) {
+  const hasRows = rows.length > 0;
+
   return (
     <div className={cn('overflow-hidden rounded-lg border border-line bg-white', className)}>
       <div className="overflow-x-auto">
@@ -31,13 +33,7 @@ export default function DataTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-line bg-white">
-            {loading ? (
-              <tr>
-                <td colSpan={columns.length} className="px-4 py-10 text-center">
-                  <Spinner className="justify-center" />
-                </td>
-              </tr>
-            ) : rows.length ? (
+            {hasRows ? (
               rows.map((row) => (
                 <tr key={typeof rowKey === 'function' ? rowKey(row) : row[rowKey]} className="hover:bg-slate-50/80">
                   {columns.map((column) => (
@@ -47,6 +43,12 @@ export default function DataTable({
                   ))}
                 </tr>
               ))
+            ) : loading ? (
+              <tr>
+                <td colSpan={columns.length} className="px-4 py-10 text-center">
+                  <Spinner className="justify-center" />
+                </td>
+              </tr>
             ) : (
               <tr>
                 <td colSpan={columns.length} className="p-4">

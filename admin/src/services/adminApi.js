@@ -1,5 +1,4 @@
 import { getLastDays, toDayKey } from '../utils/date';
-import { getOnlineCutoffIso, isRecentlyOnline } from '../utils/presence';
 import { requireSupabase } from './supabaseClient';
 
 const ADMIN_COLUMNS = 'id,user_id,role,is_active,created_at';
@@ -7,34 +6,16 @@ const PROFILE_COLUMNS =
   'id,username,full_name,avatar_url,bio,status,is_online,last_active,created_at,updated_at,account_status,disabled_at,banned_at,deleted_at,moderation_reason,warning_count,last_warned_at,ban_expires_at';
 const PROFILE_COLUMNS_SAFE =
   'id,username,full_name,avatar_url,bio,status,is_online,last_active,created_at,updated_at,account_status,disabled_at,banned_at,deleted_at,moderation_reason';
-const WARNING_COLUMNS = ['warning_count', 'last_warned_at', 'ban_expires_at'];
-const WARNING_SCHEMA_MESSAGE =
-  'Database admin chưa có cột cảnh cáo/ban theo ngày. Chạy migration supabase/migrations/202605250004_user_warnings_timed_bans.sql rồi tải lại admin.';
 const EXPO_PUSH_ENDPOINT = 'https://exp.host/--/api/v2/push/send';
 const EXPO_PUSH_BATCH_SIZE = 100;
-// Planned counts are much faster for admin overview/table pagination.
-const FAST_COUNT_MODE = 'planned';
-const DASHBOARD_COUNT_MODE = 'exact';
+// Use 'exact' for accurate counts. Change to 'planned' for faster, approximate counts.
+const FAST_COUNT_MODE = 'exact';
 const AUTO_BAN_AFTER_WARNING_DAYS = 7;
 
 function getSinceDate(days) {
   const date = new Date();
   date.setDate(date.getDate() - days);
   return date.toISOString();
-}
-
-function applyPresenceFilter(query, online) {
-  if (online === 'online') {
-    return query.eq('is_online', true).gte('last_active', getOnlineCutoffIso());
-  }
-
-  if (online === 'offline') {
-    return query.or(
-      `is_online.eq.false,is_online.is.null,last_active.lt.${getOnlineCutoffIso()},last_active.is.null`
-    );
-  }
-
-  return query;
 }
 
 function bucketByDay(rows, days, label, valueKey) {
@@ -71,19 +52,7 @@ async function countRows(table, applyFilters, countMode = FAST_COUNT_MODE) {
 function isMissingWarningColumnError(err) {
   const msg = err?.message || err?.msg || err?.details || '';
   if (typeof msg !== 'string') return false;
-  const normalizedMsg = msg.toLowerCase();
-  return WARNING_COLUMNS.some((column) => normalizedMsg.includes(column));
-}
-
-function normalizeProfileRow(profile, warningSchemaAvailable = true) {
-  return {
-    ...profile,
-    is_online: isRecentlyOnline(profile?.is_online, profile?.last_active),
-    warning_count: Number(profile?.warning_count || 0),
-    last_warned_at: profile?.last_warned_at || null,
-    ban_expires_at: profile?.ban_expires_at || null,
-    warning_schema_available: warningSchemaAvailable,
-  };
+  return msg.includes('warning_count') || msg.includes('column "warning_count"') || msg.includes('does not exist');
 }
 
 function chunkItems(items, size) {
@@ -266,30 +235,17 @@ export async function getDashboardStats() {
     chartProfiles,
     chartMessages,
   ] = await Promise.all([
-    countRows('profiles', null, DASHBOARD_COUNT_MODE),
-    countRows(
-      'profiles',
-      (query) => query.gte('last_active', activeSince),
-      DASHBOARD_COUNT_MODE
-    ),
-    countRows('friend_requests', null, DASHBOARD_COUNT_MODE),
-    countRows('friends', null, DASHBOARD_COUNT_MODE),
-    countRows('messages', null, DASHBOARD_COUNT_MODE),
-    countRows('reports', null, DASHBOARD_COUNT_MODE),
-    countRows(
-      'profiles',
-      (query) =>
-        query.eq('is_online', true).gte('last_active', getOnlineCutoffIso()),
-      DASHBOARD_COUNT_MODE
-    ),
-    countRows(
-      'profiles',
-      (query) => query.gte('created_at', getSinceDate(7)),
-      DASHBOARD_COUNT_MODE
-    ),
+    countRows('profiles'),
+    countRows('profiles', (query) => query.gte('last_active', activeSince)),
+    countRows('friend_requests'),
+    countRows('friends'),
+    countRows('messages'),
+    countRows('reports'),
+    countRows('profiles', (query) => query.eq('is_online', true)),
+    countRows('profiles', (query) => query.gte('created_at', getSinceDate(7))),
     client
       .from('profiles')
-      .select(PROFILE_COLUMNS)
+      .select(PROFILE_COLUMNS_SAFE)
       .order('created_at', { ascending: false })
       .limit(8),
     client
@@ -311,10 +267,10 @@ export async function getDashboardStats() {
       .limit(3000),
   ]);
 
-  let warningSchemaAvailable = true;
+  // If recentProfiles failed due to missing migration columns (warning_count),
+  // retry with a safe column list so the dashboard still renders.
   if (recentProfiles && recentProfiles.error) {
     if (isMissingWarningColumnError(recentProfiles.error)) {
-      warningSchemaAvailable = false;
       const retry = await client
         .from('profiles')
         .select(PROFILE_COLUMNS_SAFE)
@@ -367,9 +323,7 @@ export async function getDashboardStats() {
       users: item.users,
       messages: messageByDate.get(item.date) || 0,
     })),
-    recentUsers: (recentProfiles.data || []).map((profile) =>
-      normalizeProfileRow(profile, warningSchemaAvailable)
-    ),
+    recentUsers: recentProfiles.data || [],
     recentReports: recentReports.data || [],
   };
 }
@@ -384,40 +338,31 @@ export async function getUsers({
   const client = requireSupabase();
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
-  const buildQuery = (columns) => {
-    let query = client
-      .from('profiles')
-      .select(columns, { count: FAST_COUNT_MODE })
-      .order('created_at', { ascending: false })
-      .range(from, to);
+  let query = client
+    .from('profiles')
+    .select(PROFILE_COLUMNS_SAFE, { count: FAST_COUNT_MODE })
+    .order('created_at', { ascending: false })
+    .range(from, to);
 
-    if (search.trim()) {
-      const safeSearch = search
-        .trim()
-        .replaceAll('%', '\\%')
-        .replaceAll(',', ' ');
-      query = query.or(
-        `username.ilike.%${safeSearch}%,full_name.ilike.%${safeSearch}%`
-      );
-    }
-
-    if (status !== 'all') {
-      query = query.eq('account_status', status);
-    }
-
-    query = applyPresenceFilter(query, online);
-
-    return query;
-  };
-
-  let warningSchemaAvailable = true;
-  let result = await buildQuery(PROFILE_COLUMNS);
-  if (result.error && isMissingWarningColumnError(result.error)) {
-    warningSchemaAvailable = false;
-    result = await buildQuery(PROFILE_COLUMNS_SAFE);
+  if (search.trim()) {
+    const safeSearch = search
+      .trim()
+      .replaceAll('%', '\\%')
+      .replaceAll(',', ' ');
+    query = query.or(
+      `username.ilike.%${safeSearch}%,full_name.ilike.%${safeSearch}%`
+    );
   }
 
-  const { data, count, error } = result;
+  if (status !== 'all') {
+    query = query.eq('account_status', status);
+  }
+
+  if (online !== 'all') {
+    query = query.eq('is_online', online === 'online');
+  }
+
+  const { data, count, error } = await query;
   if (error) {
     throw error;
   }
@@ -442,7 +387,7 @@ export async function getUsers({
 
   return {
     rows: (data || []).map((profile) => ({
-      ...normalizeProfileRow(profile, warningSchemaAvailable),
+      ...profile,
       location: locationByUser[profile.id] || null,
       ghost_mode: locationByUser[profile.id]
         ? locationByUser[profile.id].is_visible === false
@@ -492,7 +437,6 @@ export async function updateUserModeration(userId, action, options = {}) {
     typeof options === 'string' ? { reason: options } : options || {};
   const trimmedReason = normalizedOptions.reason?.trim() || null;
   const banDays = normalizeBanDays(normalizedOptions.banDays);
-  let warningSchemaAvailable = true;
   let { data: currentProfile, error: currentProfileError } = await client
     .from('profiles')
     .select(PROFILE_COLUMNS)
@@ -500,7 +444,6 @@ export async function updateUserModeration(userId, action, options = {}) {
     .single();
 
   if (currentProfileError && isMissingWarningColumnError(currentProfileError)) {
-    warningSchemaAvailable = false;
     const retry = await client
       .from('profiles')
       .select(PROFILE_COLUMNS_SAFE)
@@ -512,10 +455,6 @@ export async function updateUserModeration(userId, action, options = {}) {
 
   if (currentProfileError) {
     throw currentProfileError;
-  }
-
-  if (!warningSchemaAvailable && ['warn', 'ban'].includes(action)) {
-    throw new Error(WARNING_SCHEMA_MESSAGE);
   }
 
   const warningCount = Number(currentProfile.warning_count || 0);
@@ -565,7 +504,7 @@ export async function updateUserModeration(userId, action, options = {}) {
     unban: {
       account_status: 'active',
       banned_at: null,
-      ...(warningSchemaAvailable ? { ban_expires_at: null } : {}),
+      ban_expires_at: null,
       moderation_reason: trimmedReason,
     },
   };
@@ -575,14 +514,11 @@ export async function updateUserModeration(userId, action, options = {}) {
     throw new Error(`Thao tác kiểm duyệt không được hỗ trợ: ${action}`);
   }
 
-  const selectColumns = warningSchemaAvailable
-    ? PROFILE_COLUMNS
-    : PROFILE_COLUMNS_SAFE;
   const { data, error } = await client
     .from('profiles')
     .update(payload)
     .eq('id', userId)
-    .select(selectColumns)
+    .select(PROFILE_COLUMNS)
     .single();
 
   if (error) {
@@ -598,7 +534,7 @@ export async function updateUserModeration(userId, action, options = {}) {
     warning_count: nextWarningCount,
   });
 
-  return normalizeProfileRow(data, warningSchemaAvailable);
+  return data;
 }
 
 export async function getReports({
@@ -786,7 +722,6 @@ export async function createNotification({
   targetUserId,
   title,
   body,
-  deliveryMode = 'now',
   scheduledAt,
 }) {
   const client = requireSupabase();
@@ -795,20 +730,10 @@ export async function createNotification({
     throw userError;
   }
 
-  const shouldTrySchedule = deliveryMode === 'scheduled';
-  const scheduledDate =
-    shouldTrySchedule && scheduledAt ? new Date(scheduledAt) : null;
+  const scheduledDate = scheduledAt ? new Date(scheduledAt) : null;
   const shouldSchedule = Boolean(
-    shouldTrySchedule &&
-      scheduledDate &&
-      Number.isFinite(scheduledDate.getTime()) &&
-      scheduledDate.getTime() > Date.now()
+    scheduledDate && scheduledDate.getTime() > Date.now()
   );
-
-  if (shouldTrySchedule && !shouldSchedule) {
-    throw new Error('Chọn thời gian lên lịch ở tương lai hoặc dùng Đẩy ngay.');
-  }
-
   const payload = {
     audience,
     target_user_id: audience === 'user' ? targetUserId : null,
@@ -846,22 +771,6 @@ export async function createNotification({
 
 export async function sendNotificationNow(notificationId) {
   const client = requireSupabase();
-  const { data: existingNotification, error: fetchError } = await client
-    .from('notifications')
-    .select(
-      'id,audience,target_user_id,title,body,status,scheduled_at,sent_at,created_at'
-    )
-    .eq('id', notificationId)
-    .single();
-
-  if (fetchError) {
-    throw fetchError;
-  }
-
-  if (!existingNotification) {
-    throw new Error('Không tìm thấy thông báo.');
-  }
-
   const now = new Date().toISOString();
   const { data, error } = await client
     .from('notifications')
@@ -871,9 +780,7 @@ export async function sendNotificationNow(notificationId) {
       sent_at: now,
     })
     .eq('id', notificationId)
-    .select(
-      'id,audience,target_user_id,title,body,status,scheduled_at,sent_at,created_at'
-    )
+    .select()
     .single();
 
   if (error) {

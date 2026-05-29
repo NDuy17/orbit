@@ -1,23 +1,42 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
-import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import { hasSupabaseConfig, supabase } from './supabase';
 
 const PUSH_TOKEN_STORAGE_KEY = 'orbit.expoPushToken';
 const DEFAULT_CHANNEL_ID = 'orbit-default';
-const supportsNativePush = Platform.OS === 'android' || Platform.OS === 'ios';
+const isExpoGoAndroid =
+  Platform.OS === 'android' && Constants?.appOwnership === 'expo';
+const supportsNativePush =
+  (Platform.OS === 'android' || Platform.OS === 'ios') && !isExpoGoAndroid;
 const envProjectId = process.env.EXPO_PUBLIC_EAS_PROJECT_ID;
 
-if (supportsNativePush) {
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldPlaySound: true,
-      shouldSetBadge: true,
-      shouldShowBanner: true,
-      shouldShowList: true,
-    }),
-  });
+let notificationsModulePromise = null;
+let didSetNotificationHandler = false;
+
+async function getNotificationsModule() {
+  if (!supportsNativePush) {
+    return null;
+  }
+
+  if (!notificationsModulePromise) {
+    notificationsModulePromise = import('expo-notifications');
+  }
+
+  const Notifications = await notificationsModulePromise;
+  if (!didSetNotificationHandler) {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+        shouldShowBanner: true,
+        shouldShowList: true,
+      }),
+    });
+    didSetNotificationHandler = true;
+  }
+
+  return Notifications;
 }
 
 function getConfiguredProjectId() {
@@ -38,8 +57,8 @@ function isMissingRegisterPushTokenRpcError(error) {
   );
 }
 
-async function ensureAndroidChannel() {
-  if (Platform.OS !== 'android') {
+async function ensureAndroidChannel(Notifications) {
+  if (Platform.OS !== 'android' || !Notifications) {
     return;
   }
 
@@ -74,7 +93,12 @@ export async function registerForPushNotifications() {
     return null;
   }
 
-  await ensureAndroidChannel();
+  const Notifications = await getNotificationsModule();
+  if (!Notifications) {
+    return null;
+  }
+
+  await ensureAndroidChannel(Notifications);
 
   const existingPermission = await Notifications.getPermissionsAsync();
   let finalStatus = existingPermission.status;
@@ -147,9 +171,24 @@ export function subscribeToPushNotificationResponses(onResponse) {
     return () => {};
   }
 
-  const subscription =
-    Notifications.addNotificationResponseReceivedListener(onResponse);
-  return () => subscription.remove();
+  let subscription = null;
+  let cancelled = false;
+
+  getNotificationsModule()
+    .then((Notifications) => {
+      if (!Notifications || cancelled) {
+        return;
+      }
+
+      subscription =
+        Notifications.addNotificationResponseReceivedListener(onResponse);
+    })
+    .catch(() => {});
+
+  return () => {
+    cancelled = true;
+    subscription?.remove();
+  };
 }
 
 export function subscribeToPushNotificationsReceived(onNotification) {
@@ -157,7 +196,22 @@ export function subscribeToPushNotificationsReceived(onNotification) {
     return () => {};
   }
 
-  const subscription =
-    Notifications.addNotificationReceivedListener(onNotification);
-  return () => subscription.remove();
+  let subscription = null;
+  let cancelled = false;
+
+  getNotificationsModule()
+    .then((Notifications) => {
+      if (!Notifications || cancelled) {
+        return;
+      }
+
+      subscription =
+        Notifications.addNotificationReceivedListener(onNotification);
+    })
+    .catch(() => {});
+
+  return () => {
+    cancelled = true;
+    subscription?.remove();
+  };
 }

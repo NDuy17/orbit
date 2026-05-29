@@ -69,7 +69,7 @@ export default function NotificationsScreen({ navigation }) {
   }, [currentUserId, isFocused, markNotificationsSeen, notifications]);
 
   function handleRefresh() {
-    refreshNotifications();
+    refreshNotifications({ userId: currentUserId });
   }
 
   function handleOpenNotification(notification) {
