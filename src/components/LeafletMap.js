@@ -11,7 +11,7 @@ export function buildLeafletHtml({
   currentLocation,
   trails,
   clusterLocation,
-  routeTarget,
+  routePlan,
   recenterKey,
   locationReady,
 }) {
@@ -21,7 +21,7 @@ export function buildLeafletHtml({
     currentLocation,
     trails: trails || {},
     clusterLocation,
-    routeTarget,
+    routePlan,
     recenterKey,
     locationReady,
   });
@@ -154,23 +154,53 @@ export function buildLeafletHtml({
         border: 3px solid #F8FAFC;
         box-shadow: 0 0 22px rgba(124, 58, 237, 0.9);
       }
+      .route-status {
+        position: absolute;
+        left: 14px;
+        right: 14px;
+        bottom: 18px;
+        z-index: 800;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        pointer-events: none;
+      }
+      .route-status span {
+        max-width: min(420px, calc(100vw - 28px));
+        padding: 9px 13px;
+        border-radius: 999px;
+        background: rgba(5, 8, 22, 0.84);
+        color: #F8FAFC;
+        border: 1px solid rgba(34, 211, 238, 0.42);
+        box-shadow: 0 10px 30px rgba(5, 8, 22, 0.26);
+        font-size: 13px;
+        font-weight: 800;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
     </style>
   </head>
   <body>
     <div id="map"></div>
+    <div id="route-status" class="route-status"><span></span></div>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
       const initialData = ${initialData};
       let userMarkers = {};
       let routeLayers = [];
+      let activeRouteRenderKey = '';
       let trailLayers = [];
       let currentMarker = null;
       let currentCircle = null;
       let clusterMarker = null;
       let latestUsers = initialData.users || [];
+      let latestRoutePlan = initialData.routePlan || null;
       let lastRecenterKey = initialData.recenterKey || 0;
       let hasCenteredOnReadyLocation = Boolean(initialData.locationReady);
       let latestCurrentLocation = hasLocation(initialData.currentLocation) ? initialData.currentLocation : null;
+      let isNavigationActive = Boolean(initialData.routePlan && initialData.routePlan.navigationActive);
       let isAwayFromCurrent = false;
       let userMovedMapManually = false;
       let isProgrammaticMove = false;
@@ -192,9 +222,72 @@ export function buildLeafletHtml({
         return [Number(location.latitude), Number(location.longitude)];
       }
 
+      function getLngLat(location) {
+        return [Number(location.longitude), Number(location.latitude)];
+      }
+
+      function roundRouteCoord(value) {
+        return Math.round(Number(value) * 10000) / 10000;
+      }
+
+      function getRouteKey(startLocation, endLocation) {
+        return [
+          roundRouteCoord(startLocation.latitude),
+          roundRouteCoord(startLocation.longitude),
+          roundRouteCoord(endLocation.latitude),
+          roundRouteCoord(endLocation.longitude)
+        ].join(',');
+      }
+
+      function formatRouteDistance(meters) {
+        if (!Number.isFinite(Number(meters))) {
+          return '';
+        }
+
+        return meters < 1000
+          ? Math.round(meters) + 'm'
+          : (meters / 1000).toFixed(1) + 'km';
+      }
+
+      function formatRouteDuration(seconds) {
+        if (!Number.isFinite(Number(seconds))) {
+          return '';
+        }
+
+        const minutes = Math.max(1, Math.round(seconds / 60));
+        if (minutes < 60) {
+          return minutes + ' phút';
+        }
+
+        const hours = Math.floor(minutes / 60);
+        const remainingMinutes = minutes % 60;
+        return remainingMinutes ? hours + ' giờ ' + remainingMinutes + ' phút' : hours + ' giờ';
+      }
+
       function clearLayers(layers) {
         layers.forEach((layer) => map.removeLayer(layer));
         layers.length = 0;
+      }
+
+      function setRouteStatus(text) {
+        const element = document.getElementById('route-status');
+        if (!element) {
+          return;
+        }
+
+        const label = element.querySelector('span');
+        if (!text) {
+          element.style.display = 'none';
+          if (label) {
+            label.textContent = '';
+          }
+          return;
+        }
+
+        if (label) {
+          label.textContent = text;
+        }
+        element.style.display = 'flex';
       }
 
       function getIconKey(user) {
@@ -445,20 +538,51 @@ export function buildLeafletHtml({
         });
       }
 
-      function drawRoute(nextRouteTarget, nextCurrentLocation) {
-        clearLayers(routeLayers);
-        if (!hasLocation(nextCurrentLocation) || !nextRouteTarget || !hasLocation(nextRouteTarget.location)) {
-          return;
+      function getRouteTarget(routePlan) {
+        return routePlan ? routePlan.target || routePlan : null;
+      }
+
+      function getSelectedRoute(routePlan) {
+        const routes = Array.isArray(routePlan?.routes) ? routePlan.routes : [];
+        return routes.find((route) => route.id === routePlan.selectedRouteId) || routes[0] || null;
+      }
+
+      function getRoutePoints(route) {
+        return (route?.coordinates || [])
+          .map((coord) => [Number(coord[1]), Number(coord[0])])
+          .filter((coord) => Number.isFinite(coord[0]) && Number.isFinite(coord[1]));
+      }
+
+      function getRouteRenderKey(routePlan, nextCurrentLocation) {
+        if (!routePlan) {
+          return '';
         }
 
-        const routePoints = [getLatLng(nextCurrentLocation), getLatLng(nextRouteTarget.location)];
-        const routeLine = L.polyline(routePoints, {
-          color: '#22D3EE',
-          weight: 5,
-          opacity: 0.95,
-          dashArray: '10, 10',
-          lineCap: 'round'
-        }).addTo(map);
+        const target = getRouteTarget(routePlan);
+        const routesKey = (routePlan.routes || [])
+          .map((route) => [route.id, route.coordinates?.length || 0, route.distance, route.duration].join(':'))
+          .join('|');
+        const fallbackKey =
+          !routesKey && hasLocation(nextCurrentLocation) && hasLocation(target?.location)
+            ? getRouteKey(nextCurrentLocation, target.location)
+            : '';
+
+        return [
+          target?.id || '',
+          routePlan.vehicleId || '',
+          routePlan.selectedRouteId || '',
+          routePlan.navigationActive ? 'nav' : 'preview',
+          routePlan.loading ? 'loading' : 'ready',
+          routePlan.error || '',
+          routesKey,
+          fallbackKey
+        ].join('~');
+      }
+
+      function drawRouteEndpoints(routePoints, targetName) {
+        if (!routePoints.length) {
+          return;
+        }
 
         const startCircle = L.circle(routePoints[0], {
           radius: 70,
@@ -468,16 +592,20 @@ export function buildLeafletHtml({
           weight: 2
         }).addTo(map);
 
-        const meetMarker = L.marker(routePoints[1], {
+        const meetMarker = L.marker(routePoints[routePoints.length - 1], {
           icon: L.divIcon({
             html: '<div class="meet-point"></div>',
             className: '',
             iconSize: [22, 22],
             iconAnchor: [11, 11]
-          })
+          }),
+          title: targetName || 'Điểm đến'
         }).addTo(map);
 
-        routeLayers.push(routeLine, startCircle, meetMarker);
+        routeLayers.push(startCircle, meetMarker);
+      }
+
+      function fitRouteBounds(routeLine) {
         isProgrammaticMove = true;
         map.once('moveend', function() {
           isProgrammaticMove = false;
@@ -486,6 +614,135 @@ export function buildLeafletHtml({
           padding: [80, 80],
           maxZoom: 17
         });
+      }
+
+      function drawRouteLine(routePoints, options) {
+        const routeLine = L.polyline(routePoints, {
+          color: options.color,
+          weight: options.weight,
+          opacity: options.opacity,
+          dashArray: options.dashArray || null,
+          lineCap: 'round',
+          lineJoin: 'round'
+        }).addTo(map);
+
+        if (options.routeId) {
+          routeLine.on('click', function() {
+            postToApp({ type: 'selectRoute', routeId: options.routeId });
+          });
+        }
+
+        routeLayers.push(routeLine);
+        return routeLine;
+      }
+
+      function drawFallbackRoute(startLocation, endLocation, targetName) {
+        const routePoints = [getLatLng(startLocation), getLatLng(endLocation)];
+        clearLayers(routeLayers);
+        const routeLine = drawRouteLine(routePoints, {
+          color: '#F59E0B',
+          weight: 4,
+          opacity: 0.78,
+          dashArray: '8, 12'
+        });
+        drawRouteEndpoints(routePoints, targetName);
+        fitRouteBounds(routeLine);
+      }
+
+      function drawRoutePlan(nextRoutePlan, nextCurrentLocation) {
+        latestRoutePlan = nextRoutePlan || null;
+        isNavigationActive = Boolean(nextRoutePlan?.navigationActive);
+
+        const target = getRouteTarget(nextRoutePlan);
+        if (!hasLocation(nextCurrentLocation) || !target || !hasLocation(target.location)) {
+          activeRouteRenderKey = '';
+          clearLayers(routeLayers);
+          setRouteStatus('');
+          return;
+        }
+
+        const renderKey = getRouteRenderKey(nextRoutePlan, nextCurrentLocation);
+        if (renderKey === activeRouteRenderKey) {
+          if (isNavigationActive && !userMovedMapManually) {
+            centerOnCurrent(nextCurrentLocation);
+          }
+          return;
+        }
+
+        activeRouteRenderKey = renderKey;
+        const targetName = target.name || 'điểm đến';
+        const routes = Array.isArray(nextRoutePlan.routes) ? nextRoutePlan.routes : [];
+        const selectedRoute = getSelectedRoute(nextRoutePlan);
+
+        if (!routes.length || !selectedRoute) {
+          drawFallbackRoute(nextCurrentLocation, target.location, targetName);
+          setRouteStatus(
+            nextRoutePlan.error ||
+              (nextRoutePlan.loading
+                ? 'Đang tìm các tuyến đường phù hợp tới ' + targetName + '...'
+                : 'Chưa có tuyến đường phù hợp, đang hiển thị hướng tham khảo.')
+          );
+          if (isNavigationActive && !userMovedMapManually) {
+            centerOnCurrent(nextCurrentLocation);
+          }
+          return;
+        }
+
+        clearLayers(routeLayers);
+        let selectedRouteLine = null;
+        const selectedRouteId = selectedRoute.id;
+
+        routes.forEach((route) => {
+          if (route.id === selectedRouteId) {
+            return;
+          }
+
+          const routePoints = getRoutePoints(route);
+          if (routePoints.length < 2) {
+            return;
+          }
+
+          drawRouteLine(routePoints, {
+            color: '#94A3B8',
+            weight: 5,
+            opacity: 0.36,
+            routeId: route.id
+          });
+        });
+
+        const selectedRoutePoints = getRoutePoints(selectedRoute);
+        if (selectedRoutePoints.length >= 2) {
+          selectedRouteLine = drawRouteLine(selectedRoutePoints, {
+            color: '#22D3EE',
+            weight: 7,
+            opacity: 0.98,
+            routeId: selectedRoute.id
+          });
+          drawRouteEndpoints(selectedRoutePoints, targetName);
+        }
+
+        setRouteStatus(
+          (isNavigationActive && nextRoutePlan.loading
+            ? 'Đang cập nhật đường tới '
+            : isNavigationActive
+              ? 'Đang chỉ đường tới '
+              : 'Đường bộ tới ') +
+            targetName +
+            ': ' +
+            formatRouteDistance(selectedRoute.distance) +
+            ' · ' +
+            formatRouteDuration(selectedRoute.duration)
+        );
+
+        if (isNavigationActive && !userMovedMapManually) {
+          if (isAwayFromCurrent) {
+            isAwayFromCurrent = false;
+            postToApp({ type: 'awayFromUserChanged', isAwayFromUser: false });
+          }
+          centerOnCurrent(nextCurrentLocation);
+        } else if (selectedRouteLine) {
+          fitRouteBounds(selectedRouteLine);
+        }
       }
 
       function drawTrails(nextTrails) {
@@ -533,7 +790,7 @@ export function buildLeafletHtml({
 
         drawCurrent(nextLocation);
         drawUsers(nextData.users || []);
-        drawRoute(nextData.routeTarget, nextLocation);
+        drawRoutePlan(nextData.routePlan, nextLocation);
 
         if (nextData.locationReady && !hasCenteredOnReadyLocation) {
           hasCenteredOnReadyLocation = true;
@@ -544,7 +801,9 @@ export function buildLeafletHtml({
           userMovedMapManually = false;
           postToApp({ type: 'awayFromUserChanged', isAwayFromUser: false });
           centerOnCurrent(nextLocation);
-        } else if (!userMovedMapManually && !nextData.routeTarget) {
+        } else if (nextData.routePlan?.navigationActive && !userMovedMapManually) {
+          centerOnCurrent(nextLocation);
+        } else if (!userMovedMapManually && !nextData.routePlan) {
           centerOnCurrent(nextLocation);
         }
 
@@ -573,12 +832,12 @@ export function buildLeafletHtml({
       });
 
       drawCurrent(initialData.currentLocation);
-      if (!initialData.routeTarget) {
+      if (!initialData.routePlan) {
         centerOnCurrent(initialData.currentLocation);
       }
       drawTrails(initialData.trails || {});
       drawUsers(initialData.users || []);
-      drawRoute(initialData.routeTarget, initialData.currentLocation);
+      drawRoutePlan(initialData.routePlan, initialData.currentLocation);
       drawCluster(initialData.clusterLocation);
       map.on('dragstart zoomstart', function() {
         if (!isProgrammaticMove) {
@@ -599,12 +858,13 @@ export default function LeafletMap({
   currentLocation,
   trails,
   clusterLocation,
-  routeTarget,
+  routePlan,
   recenterKey = 0,
   locationReady = false,
   onAwayFromUserChange,
   onSelectUser,
   onSelectUserGroup,
+  onSelectRoute,
 }) {
   const webViewRef = useRef(null);
   const iframeRef = useRef(null);
@@ -616,7 +876,7 @@ export default function LeafletMap({
       currentLocation,
       trails,
       clusterLocation,
-      routeTarget,
+      routePlan,
       recenterKey,
       locationReady,
     });
@@ -629,13 +889,13 @@ export default function LeafletMap({
       type: 'updateData',
       users: users || [],
       currentLocation,
-      routeTarget,
+      routePlan,
       recenterKey,
       locationReady,
       trails: trails || {},
       clusterLocation,
     }),
-    [clusterLocation, currentLocation, locationReady, recenterKey, routeTarget, trails, users]
+    [clusterLocation, currentLocation, locationReady, recenterKey, routePlan, trails, users]
   );
 
   function sendUpdateToWebFrame() {
@@ -668,6 +928,8 @@ export default function LeafletMap({
           const userIdSet = new Set(message.userIds || []);
           const groupUsers = users.filter((item) => userIdSet.has(item.id));
           onSelectUserGroup?.(groupUsers);
+        } else if (message.type === 'selectRoute') {
+          onSelectRoute?.(message.routeId);
         } else if (message.type === 'awayFromUserChanged') {
           onAwayFromUserChange?.(Boolean(message.isAwayFromUser));
         }
@@ -678,7 +940,7 @@ export default function LeafletMap({
 
     window.addEventListener('message', handleWebMessage);
     return () => window.removeEventListener('message', handleWebMessage);
-  }, [onAwayFromUserChange, onSelectUser, onSelectUserGroup, users]);
+  }, [onAwayFromUserChange, onSelectRoute, onSelectUser, onSelectUserGroup, users]);
 
   if (Platform.OS === 'web') {
     return React.createElement('iframe', {
@@ -706,6 +968,8 @@ export default function LeafletMap({
         const userIdSet = new Set(message.userIds || []);
         const groupUsers = users.filter((item) => userIdSet.has(item.id));
         onSelectUserGroup?.(groupUsers);
+      } else if (message.type === 'selectRoute') {
+        onSelectRoute?.(message.routeId);
       } else if (message.type === 'awayFromUserChanged') {
         onAwayFromUserChange?.(Boolean(message.isAwayFromUser));
       }

@@ -7,6 +7,7 @@ import { requireSupabase, supabase } from './supabase';
 
 const METERS_PER_DEGREE_LATITUDE = 111320;
 const PUBLIC_LOCATION_PADDING_METERS = 150;
+const MAX_SUGGESTION_RADIUS_METERS = 5000;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -20,6 +21,10 @@ function roundCoordinate(value) {
 
 function hasCoordinatePair(value) {
   return value?.latitude != null && value?.longitude != null;
+}
+
+function uniqueUuidItems(items) {
+  return [...new Set((items || []).filter((item) => isUuid(item)))];
 }
 
 function clampCoordinate(value, min, max) {
@@ -316,7 +321,14 @@ export async function fetchVisibleNearbyUsers({
   }
 
   const client = requireSupabase();
-  const bounds = getCoordinateBounds(currentCoords, radius);
+  const suggestionRadius = Math.min(
+    Number(radius) || MAX_SUGGESTION_RADIUS_METERS,
+    MAX_SUGGESTION_RADIUS_METERS
+  );
+  const visibleFriendIds = uniqueUuidItems(friendIds).filter(
+    (friendId) => friendId !== currentUserId
+  );
+  const bounds = getCoordinateBounds(currentCoords, suggestionRadius);
   let query = client
     .from('locations')
     .select('*')
@@ -337,7 +349,26 @@ export async function fetchVisibleNearbyUsers({
     throw error;
   }
 
-  const profileIds = (data || []).map((row) => row.user_id).filter(Boolean);
+  let friendLocations = [];
+  if (visibleFriendIds.length) {
+    const { data: friendData, error: friendError } = await client
+      .from('locations')
+      .select('*')
+      .in('user_id', visibleFriendIds)
+      .eq('is_visible', true);
+
+    if (friendError) {
+      throw friendError;
+    }
+
+    friendLocations = friendData || [];
+  }
+
+  const locationRows = getLatestRowsByUserId([
+    ...(data || []),
+    ...friendLocations,
+  ]);
+  const profileIds = locationRows.map((row) => row.user_id).filter(Boolean);
   let profileMap = {};
 
   if (profileIds.length) {
@@ -356,7 +387,7 @@ export async function fetchVisibleNearbyUsers({
     }, {});
   }
 
-  return getLatestRowsByUserId(data)
+  return locationRows
     .filter((row) => hasCoordinatePair(row))
     .map((row) => {
       const isFriend = friendIds.includes(row.user_id);
@@ -381,7 +412,7 @@ export async function fetchVisibleNearbyUsers({
         location: displayCoords,
       };
     })
-    .filter((user) => user.distance <= radius);
+    .filter((user) => user.isFriend || user.distance <= suggestionRadius);
 }
 
 export function subscribeToLocations(onChange) {

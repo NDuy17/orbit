@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Ionicons } from '@expo/vector-icons';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AutoHideNotice from '../components/AutoHideNotice';
 import GlassCard from '../components/GlassCard';
 import LeafletMap from '../components/LeafletMap';
 import MapUserGroupSheet from '../components/MapUserGroupSheet';
+import RoutePlannerSheet from '../components/RoutePlannerSheet';
 import UserBottomSheet from '../components/UserBottomSheet';
 import { clusterLocation, userTrails } from '../data/mockLocations';
 import {
@@ -15,6 +17,14 @@ import {
   subscribeToLocations,
   watchDeviceLocation,
 } from '../services/locationService';
+import {
+  fetchRouteOptions,
+  formatRouteDistance,
+  formatRouteDuration,
+  getAutoRerouteConfig,
+  getRouteProgress,
+  getRouteVehicle,
+} from '../services/routeService';
 import useLocationStore from '../store/locationStore';
 import useUserStore from '../store/userStore';
 import colors from '../theme/colors';
@@ -88,14 +98,29 @@ export default function HomeMapScreen({ navigation }) {
   const refreshTimer = useRef(null);
   const lastLocationSaveRef = useRef({ coords: null, modeKey: null, savedAt: 0 });
   const latestLocation = useRef(currentLocation);
+  const autoRerouteRef = useRef({ coords: null, targetCoords: null, requestedAt: 0 });
+  const autoRerouteInFlightRef = useRef(false);
+  const navigationProgressRef = useRef({ routeId: null, coords: null, alongDistance: null });
   const [locationReady, setLocationReady] = useState(false);
-  const [routeTarget, setRouteTarget] = useState(null);
+  const [directionsTarget, setDirectionsTarget] = useState(null);
+  const [routeStartLocation, setRouteStartLocation] = useState(null);
+  const [routeVehicleId, setRouteVehicleId] = useState('motorbike');
+  const [routeOptions, setRouteOptions] = useState([]);
+  const [selectedRouteId, setSelectedRouteId] = useState(null);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeError, setRouteError] = useState(null);
+  const [routeWarning, setRouteWarning] = useState(null);
+  const [routePlannerOpen, setRoutePlannerOpen] = useState(false);
+  const [navigationActive, setNavigationActive] = useState(false);
   const [recenterKey, setRecenterKey] = useState(0);
   const [isMapAwayFromUser, setIsMapAwayFromUser] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
   const [mapUsers, setMapUsers] = useState([]);
   const [selectedMapGroupUsers, setSelectedMapGroupUsers] = useState([]);
   const onlineFriendCount = friends.filter((friend) => friend.isOnline).length;
+  const suggestionCount = users.filter(
+    (user) => user.friendshipStatus !== 'friends' && !user.isFriend
+  ).length;
   const privacyLabel = isAdminAccount
     ? 'Chế độ admin'
     : ghostMode
@@ -111,6 +136,36 @@ export default function HomeMapScreen({ navigation }) {
     [friends]
   );
   const friendIds = useMemo(() => (friendIdsKey ? friendIdsKey.split('|') : []), [friendIdsKey]);
+  const selectedRoute = useMemo(
+    () => routeOptions.find((route) => route.id === selectedRouteId) || routeOptions[0] || null,
+    [routeOptions, selectedRouteId]
+  );
+  const selectedVehicle = useMemo(() => getRouteVehicle(routeVehicleId), [routeVehicleId]);
+  const routePlan = useMemo(
+    () =>
+      directionsTarget
+        ? {
+            target: directionsTarget,
+            routes: routeOptions,
+            selectedRouteId: selectedRoute?.id || null,
+            vehicleId: routeVehicleId,
+            vehicleLabel: selectedVehicle.shortLabel,
+            loading: routeLoading,
+            error: routeError,
+            navigationActive,
+          }
+        : null,
+    [
+      directionsTarget,
+      navigationActive,
+      routeError,
+      routeLoading,
+      routeOptions,
+      routeVehicleId,
+      selectedRoute,
+      selectedVehicle.shortLabel,
+    ]
+  );
 
   useEffect(() => {
     const nextMapUsers = users.map(toMapUser);
@@ -250,22 +305,193 @@ export default function HomeMapScreen({ navigation }) {
   }, [actionNotice, clearActionNotice]);
 
   useEffect(() => {
-    if (!routeTarget) {
+    if (!directionsTarget) {
       return;
     }
 
-    const updatedTarget = users.find((user) => user.id === routeTarget.id);
+    const updatedTarget = users.find((user) => user.id === directionsTarget.id);
     const targetChanged =
       updatedTarget &&
-      (updatedTarget.avatar !== routeTarget.avatar ||
-        updatedTarget.name !== routeTarget.name ||
-        updatedTarget.location?.latitude !== routeTarget.location?.latitude ||
-        updatedTarget.location?.longitude !== routeTarget.location?.longitude);
+      (updatedTarget.avatar !== directionsTarget.avatar ||
+        updatedTarget.name !== directionsTarget.name ||
+        updatedTarget.location?.latitude !== directionsTarget.location?.latitude ||
+        updatedTarget.location?.longitude !== directionsTarget.location?.longitude);
 
     if (targetChanged) {
-      setRouteTarget(updatedTarget);
+      setDirectionsTarget(updatedTarget);
     }
-  }, [routeTarget, users]);
+  }, [directionsTarget, users]);
+
+  useEffect(() => {
+    if (!directionsTarget || navigationActive) {
+      return undefined;
+    }
+
+    let active = true;
+    const startLocation = routeStartLocation || latestLocation.current || currentLocation;
+
+    async function loadRoutes() {
+      setRouteLoading(true);
+      setRouteError(null);
+      setRouteWarning(null);
+      setRouteOptions([]);
+
+      try {
+        const result = await fetchRouteOptions({
+          startLocation,
+          targetLocation: directionsTarget.location,
+          vehicleId: routeVehicleId,
+        });
+
+        if (!active) {
+          return;
+        }
+
+        setRouteOptions(result.routes);
+        setRouteWarning(result.warning);
+        setSelectedRouteId(result.routes[0]?.id || null);
+      } catch (err) {
+        if (active) {
+          const message = err.message || '';
+          setRouteError(message.toLowerCase().includes('network') ? getVietnameseErrorMessage(message) : message);
+          setSelectedRouteId(null);
+        }
+      } finally {
+        if (active) {
+          setRouteLoading(false);
+        }
+      }
+    }
+
+    loadRoutes();
+
+    return () => {
+      active = false;
+    };
+  }, [
+    directionsTarget,
+    navigationActive,
+    routeStartLocation,
+    routeVehicleId,
+  ]);
+
+  useEffect(() => {
+    if (
+      !navigationActive ||
+      !directionsTarget ||
+      !directionsTarget.location ||
+      !selectedRoute ||
+      !currentLocation
+    ) {
+      return undefined;
+    }
+
+    const config = getAutoRerouteConfig(routeVehicleId);
+    const progress = getRouteProgress(currentLocation, selectedRoute);
+    const lastProgress = navigationProgressRef.current;
+    const hasProgressSample = lastProgress.routeId === selectedRoute.id && lastProgress.coords;
+    const movedSinceProgress = hasProgressSample
+      ? calculateCoordinateDistance(lastProgress.coords, currentLocation)
+      : Infinity;
+    const wentBackwards =
+      hasProgressSample &&
+      movedSinceProgress >= config.minMoveMeters &&
+      Number.isFinite(progress.alongDistance) &&
+      progress.alongDistance < lastProgress.alongDistance - config.backwardsMeters;
+
+    if (!hasProgressSample || movedSinceProgress >= config.minMoveMeters) {
+      navigationProgressRef.current = {
+        routeId: selectedRoute.id,
+        coords: currentLocation,
+        alongDistance: progress.alongDistance,
+      };
+    }
+
+    const lastReroute = autoRerouteRef.current;
+    const now = Date.now();
+    const movedSinceRequest = lastReroute.coords
+      ? calculateCoordinateDistance(lastReroute.coords, currentLocation)
+      : Infinity;
+    const targetMoved = lastReroute.targetCoords
+      ? calculateCoordinateDistance(lastReroute.targetCoords, directionsTarget.location)
+      : Infinity;
+    const offRoute = progress.distanceFromRoute > config.offRouteMeters;
+    const targetRelocated = targetMoved > config.offRouteMeters;
+    const shouldReroute = offRoute || wentBackwards || targetRelocated;
+    const intervalReady = now - lastReroute.requestedAt >= config.minIntervalMs;
+    const movementReady = movedSinceRequest >= config.minMoveMeters || targetRelocated;
+
+    if (
+      !shouldReroute ||
+      !intervalReady ||
+      !movementReady ||
+      autoRerouteInFlightRef.current
+    ) {
+      return undefined;
+    }
+
+    let active = true;
+    autoRerouteInFlightRef.current = true;
+    autoRerouteRef.current = {
+      coords: currentLocation,
+      targetCoords: directionsTarget.location,
+      requestedAt: now,
+    };
+
+    async function rerouteFromCurrentLocation() {
+      setRouteLoading(true);
+      setRouteError(null);
+      setRouteWarning(
+        wentBackwards
+          ? 'Bạn đang đi sai hướng, Orbit đang tính lại tuyến.'
+          : offRoute
+            ? 'Bạn đã lệch khỏi tuyến, Orbit đang tính lại đường.'
+            : 'Điểm đến đã đổi vị trí, Orbit đang cập nhật tuyến.'
+      );
+
+      try {
+        const result = await fetchRouteOptions({
+          startLocation: currentLocation,
+          targetLocation: directionsTarget.location,
+          vehicleId: routeVehicleId,
+        });
+
+        if (!active) {
+          return;
+        }
+
+        const nextRoute = result.routes[0] || null;
+        setRouteOptions(result.routes);
+        setSelectedRouteId(nextRoute?.id || null);
+        setRouteStartLocation(currentLocation);
+        setRouteWarning(result.warning || 'Đã cập nhật tuyến theo vị trí hiện tại.');
+        navigationProgressRef.current = {
+          routeId: nextRoute?.id || null,
+          coords: currentLocation,
+          alongDistance: 0,
+        };
+      } catch (err) {
+        if (active) {
+          setRouteWarning('Chưa tính lại được tuyến mới, đang giữ tuyến hiện tại.');
+        }
+      } finally {
+        setRouteLoading(false);
+        autoRerouteInFlightRef.current = false;
+      }
+    }
+
+    rerouteFromCurrentLocation();
+
+    return () => {
+      active = false;
+    };
+  }, [
+    currentLocation,
+    directionsTarget,
+    navigationActive,
+    routeVehicleId,
+    selectedRoute,
+  ]);
 
   useEffect(() => {
     if (!backendUserId || !locationReady || isAdminAccount) {
@@ -418,8 +644,80 @@ export default function HomeMapScreen({ navigation }) {
     }
   }
 
+  const resetDirections = useCallback(() => {
+    setDirectionsTarget(null);
+    setRouteStartLocation(null);
+    setRouteOptions([]);
+    setSelectedRouteId(null);
+    setRouteLoading(false);
+    setRouteError(null);
+    setRouteWarning(null);
+    setRoutePlannerOpen(false);
+    setNavigationActive(false);
+    autoRerouteRef.current = { coords: null, targetCoords: null, requestedAt: 0 };
+    autoRerouteInFlightRef.current = false;
+    navigationProgressRef.current = { routeId: null, coords: null, alongDistance: null };
+  }, []);
+
+  const openDirectionsForUser = useCallback(
+    (user) => {
+      if (!user) {
+        return;
+      }
+
+      const startLocation = latestLocation.current || currentLocation;
+      setDirectionsTarget(user);
+      setRouteStartLocation(startLocation);
+      setRouteOptions([]);
+      setSelectedRouteId(null);
+      setRouteError(startLocation ? null : 'Chưa có vị trí hiện tại để dẫn đường.');
+      setRouteWarning(null);
+      setRoutePlannerOpen(true);
+      setNavigationActive(false);
+      autoRerouteRef.current = { coords: startLocation, targetCoords: user.location, requestedAt: Date.now() };
+      autoRerouteInFlightRef.current = false;
+      navigationProgressRef.current = { routeId: null, coords: null, alongDistance: null };
+      setSelectedMapGroupUsers([]);
+      clearSelectedUser();
+    },
+    [clearSelectedUser, currentLocation]
+  );
+
+  const handleSelectRoute = useCallback((routeId) => {
+    if (routeId) {
+      setSelectedRouteId(routeId);
+    }
+  }, []);
+
+  const handleSelectVehicle = useCallback((vehicleId) => {
+    setRouteVehicleId(vehicleId);
+    setRouteStartLocation(latestLocation.current || currentLocation);
+    setNavigationActive(false);
+    setRoutePlannerOpen(true);
+  }, [currentLocation]);
+
+  const handleStartNavigation = useCallback(() => {
+    if (!selectedRoute) {
+      return;
+    }
+
+    setNavigationActive(true);
+    setRoutePlannerOpen(false);
+    setIsMapAwayFromUser(false);
+    autoRerouteRef.current = {
+      coords: latestLocation.current || currentLocation,
+      targetCoords: directionsTarget?.location || null,
+      requestedAt: Date.now(),
+    };
+    navigationProgressRef.current = {
+      routeId: selectedRoute.id,
+      coords: latestLocation.current || currentLocation,
+      alongDistance: 0,
+    };
+    setRecenterKey((value) => value + 1);
+  }, [currentLocation, directionsTarget, selectedRoute]);
+
   const handleRecenterOnUser = useCallback(() => {
-    setRouteTarget(null);
     setIsMapAwayFromUser(false);
     setRecenterKey((value) => value + 1);
   }, []);
@@ -431,12 +729,13 @@ export default function HomeMapScreen({ navigation }) {
         currentLocation={mapCurrentLocation}
         trails={isBackendReady ? emptyTrails : userTrails}
         clusterLocation={isBackendReady ? null : clusterLocation}
-        routeTarget={routeTarget}
+        routePlan={routePlan}
         recenterKey={recenterKey}
         locationReady={mapLocationReady}
         onAwayFromUserChange={setIsMapAwayFromUser}
         onSelectUser={handleSelectUserFromMap}
         onSelectUserGroup={handleSelectUserGroupFromMap}
+        onSelectRoute={handleSelectRoute}
       />
 
       <SafeAreaView style={styles.floating}>
@@ -444,7 +743,8 @@ export default function HomeMapScreen({ navigation }) {
           <GlassCard style={styles.topCard}>
             <Text style={styles.cardTitle}>Radar quanh bạn</Text>
             <View style={styles.metricsRow}>
-              <Text style={styles.metricText}>{users.length} gần bạn</Text>
+              <Text style={styles.metricText}>{users.length} trên bản đồ</Text>
+              <Text style={styles.metricText}>{suggestionCount} gợi ý tối đa 5km</Text>
               <Text style={styles.metricText}>{onlineFriendCount} bạn online</Text>
               <Text style={styles.metricText}>{privacyLabel}</Text>
             </View>
@@ -489,10 +789,65 @@ export default function HomeMapScreen({ navigation }) {
         </SafeAreaView>
       ) : null}
 
+      {directionsTarget && !routePlannerOpen ? (
+        <SafeAreaView pointerEvents="box-none" style={styles.navigationFloating}>
+          <GlassCard style={styles.navigationCard}>
+            <View style={styles.navigationInfo}>
+              <View style={styles.navigationTitleRow}>
+                <Ionicons
+                  name={navigationActive ? selectedVehicle.icon : 'navigate-outline'}
+                  size={18}
+                  color={colors.accent}
+                />
+                <Text style={styles.navigationEyebrow}>
+                  {navigationActive ? selectedVehicle.shortLabel : 'Chọn tuyến'}
+                </Text>
+              </View>
+              <Text style={styles.navigationTitle} numberOfLines={1}>
+                {directionsTarget.name || 'Điểm đến'}
+              </Text>
+              <Text style={styles.navigationMeta} numberOfLines={1}>
+                {selectedRoute
+                  ? `${formatRouteDistance(selectedRoute.distance)} · ${formatRouteDuration(selectedRoute.duration)}`
+                  : routeLoading
+                    ? 'Đang tìm tuyến đường'
+                    : routeError || 'Chưa có tuyến đường'}
+              </Text>
+            </View>
+            <View style={styles.navigationActions}>
+              <Pressable style={styles.navigationActionButton} onPress={() => setRoutePlannerOpen(true)}>
+                <Ionicons name="map-outline" size={17} color={colors.accent} />
+                <Text style={styles.navigationActionText}>{navigationActive ? 'Tuyến' : 'Mở'}</Text>
+              </Pressable>
+              <Pressable style={[styles.navigationActionButton, styles.navigationExitButton]} onPress={resetDirections}>
+                <Ionicons name="close-circle-outline" size={17} color={colors.danger} />
+                <Text style={[styles.navigationActionText, styles.navigationExitText]}>Thoát</Text>
+              </Pressable>
+            </View>
+          </GlassCard>
+        </SafeAreaView>
+      ) : null}
+
       <MapUserGroupSheet
         users={selectedMapGroupUsers}
         onClose={() => setSelectedMapGroupUsers([])}
         onSelectUser={handleSelectUserFromGroup}
+      />
+
+      <RoutePlannerSheet
+        visible={routePlannerOpen && Boolean(directionsTarget)}
+        target={directionsTarget}
+        vehicleId={routeVehicleId}
+        routes={routeOptions}
+        selectedRouteId={selectedRoute?.id || null}
+        loading={routeLoading}
+        error={routeError}
+        warning={routeWarning}
+        onClose={() => setRoutePlannerOpen(false)}
+        onExit={resetDirections}
+        onSelectVehicle={handleSelectVehicle}
+        onSelectRoute={handleSelectRoute}
+        onStart={handleStartNavigation}
       />
 
       <UserBottomSheet
@@ -510,11 +865,8 @@ export default function HomeMapScreen({ navigation }) {
           })
         }
         onFriendAction={handleFriendAction}
-        onDirections={() =>
-          selectedUser &&
-          setRouteTarget((currentTarget) => (currentTarget?.id === selectedUser.id ? null : selectedUser))
-        }
-        isDirectionsActive={routeTarget?.id === selectedUser?.id}
+        onDirections={() => selectedUser && openDirectionsForUser(selectedUser)}
+        isDirectionsActive={directionsTarget?.id === selectedUser?.id}
         isFriendActionLoading={Boolean(friendActionLoading[selectedUser?.id])}
         actionNotice={actionNotice}
       />
@@ -614,5 +966,73 @@ const styles = StyleSheet.create({
   recenterText: {
     color: colors.background,
     fontWeight: '900',
+  },
+  navigationFloating: {
+    position: 'absolute',
+    left: spacing.lg,
+    right: spacing.lg,
+    bottom: Platform.OS === 'android' ? 86 : 78,
+    pointerEvents: 'box-none',
+  },
+  navigationCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: spacing.md,
+  },
+  navigationInfo: {
+    flex: 1,
+    minWidth: 0,
+  },
+  navigationTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  navigationEyebrow: {
+    color: colors.accent,
+    fontSize: 12,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  navigationTitle: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '900',
+    marginTop: 3,
+  },
+  navigationMeta: {
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 3,
+  },
+  navigationActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  navigationActionButton: {
+    minWidth: 68,
+    minHeight: 42,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 5,
+    paddingHorizontal: spacing.sm,
+    backgroundColor: colors.accentSoft,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  navigationExitButton: {
+    backgroundColor: 'rgba(248, 113, 113, 0.12)',
+  },
+  navigationActionText: {
+    color: colors.accent,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  navigationExitText: {
+    color: colors.danger,
   },
 });

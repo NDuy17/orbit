@@ -60,7 +60,7 @@ export default function UserBottomSheet({
               style={styles.actionButton}
             />
             <OrbitButton
-              title={isDirectionsActive ? 'Ẩn đường đi' : 'Dẫn đường'}
+              title={isDirectionsActive ? 'Xem chỉ đường' : 'Dẫn đường'}
               variant="ghost"
               onPress={onDirections}
               style={styles.actionButton}
